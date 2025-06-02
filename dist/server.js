@@ -78,7 +78,7 @@ app.use((0, cors_1.default)({
     origin: ['http://localhost:3000', 'https://your-firebase-project-id.web.app',
         'https://9000-firebase-studio-1747723924581.cluster-ikxjzjhlifcwuroomfkjrx437g.cloudworkstations.dev',
         'http://localhost:9002',
-        '*'
+        'https://invoicecraft-frontend.vercel.app'
     ],
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
