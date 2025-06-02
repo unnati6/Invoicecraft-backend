@@ -1,0 +1,8 @@
+# Node modules
+node_modules/
+
+# Environment variables
+.env
+
+# Firebase Service Account Key (Replace with your actual file name)
+invoicecraft-4hbd-firebase-adminsdk-*.json
