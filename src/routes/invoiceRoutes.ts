@@ -203,34 +203,189 @@ export const createInvoiceRouter = ({ supabase }: RouterOptions) => {
   // }));
 
   // PUT (Update) invoice by ID
-  router.put('/:id', asyncHandler(async (req, res) => {
-    const invoiceId = req.params.id;
-    const updateData = req.body;
-    
-    try {
-      const { data, error } = await supabase
-        .from('invoice')
-        .update(updateData)
-        .eq('id', invoiceId)
-        .select();
-
-      if (error) {
-        console.error(`Error updating invoice ${invoiceId}:`, error.message);
-        res.status(500);
-        throw new Error(error.message);
-      }
-      if (!data || data.length === 0) {
-        res.status(404).json({ error: 'Invoice not found or no changes made.' });
-        return;
-      }
-      res.json(data[0]);
-      return;
-    } catch (error: any) {
-      console.error('Unexpected error in PUT /api/invoices/:id:', error.message);
-      res.status(500);
-      throw new Error('Internal server error.');
+  // PUT (Update) invoice by ID
+  const safeParseJsonb = (jsonbInput: any) => {
+    if (jsonbInput === null || jsonbInput === undefined) {
+        return []; // Explicitly return empty array for null or undefined
     }
-  }));
+    if (typeof jsonbInput === 'string') {
+        try {
+            const parsed = JSON.parse(jsonbInput);
+            // Ensure that if the parsed result is not an array, we still return an array (e.g., if it parsed to a scalar or object)
+            return Array.isArray(parsed) ? parsed : [];
+        } catch (e) {
+            console.error("Failed to parse JSONB string:", e);
+            return []; // Return an empty array on parse error
+        }
+    }
+    // If it's already an array or object, return it as is, but ensure it's an array
+    return Array.isArray(jsonbInput) ? jsonbInput : [];
+};
+
+    router.put('/:id', asyncHandler(async (req, res) => {
+        const invoiceId = req.params.id;
+        // Destructure all fields that could potentially be updated
+        const {
+            customerId,
+            invoiceNumber,
+            issueDate,
+            dueDate,
+            items,
+            additionalCharges,
+            taxRate,
+            discountEnabled,
+            discountDescription,
+            discountType,
+            discountValue,
+            msaContent,
+            msaCoverPageTemplateId,
+            termsAndConditions,
+            status,
+            paymentTerms,
+            customPaymentTerms,
+            commitmentPeriod,
+            customCommitmentPeriod,
+            paymentFrequency,
+            customPaymentFrequency,
+            serviceStartDate,
+            serviceEndDate,
+            // Exclude customerName and currencyCode as they are derived/handled by backend
+            customerName,
+            currencyCode,
+            ...restOfBody // Capture any other fields if necessary
+        } = req.body;
+
+        try {
+            // Fetch existing invoice to get current values for recalculations and fallbacks
+            const { data: existingInvoice, error: fetchError } = await supabase
+                .from('invoice')
+                .select(`
+                    customerId, items, additionalCharges, taxRate,
+                    discountEnabled, discountType, discountValue, discountDescription,
+                    paymentTerms, customPaymentTerms, commitmentPeriod, customCommitmentPeriod, paymentFrequency, customPaymentFrequency,
+                    msaContent, msaCoverPageTemplateId, termsAndConditions, status,
+                    invoiceNumber, issueDate, dueDate, serviceStartDate, serviceEndDate,
+                    customerActualName, currencyCode, subtotal, taxAmount, discountAmount, total
+                `) // Select all fields needed for potential fallbacks and recalculation
+                .eq('id', invoiceId)
+                .single();
+
+            if (fetchError || !existingInvoice) {
+                console.error("Error fetching existing invoice for update:", fetchError?.message || "Invoice not found.");
+                return void res.status(404).json({ error: 'Invoice not found for update.' });
+            }
+
+            // Determine customerId to use (from updateData or existing form)
+            const currentCustomerId = customerId || existingInvoice.customerId;
+
+            const { data: customer, error: customerError } = await supabase
+                .from('customer')
+                .select('name, currency')
+                .eq('id', currentCustomerId)
+                .single();
+
+            if (customerError || !customer) {
+                console.error("Error fetching customer for invoice update:", customerError?.message || "Customer not found.");
+                return void res.status(400).json({ error: 'Customer not found or invalid customer ID provided for update.' });
+            }
+
+            // Prepare values for calculation and DB update, using nullish coalescing (??)
+            // for numbers/booleans where 0/false are valid, and logical OR (||) for strings
+            // or objects where empty string/null might be a valid value from client.
+
+            // Ensure JSONB fields are parsed from existing data before merging/calculating
+            const parsedExistingItems = safeParseJsonb(existingInvoice.items);
+            const parsedExistingAdditionalCharges = safeParseJsonb(existingInvoice.additionalCharges);
+
+            // Use incoming items/additionalCharges if provided, else use parsed existing ones
+            const itemsForCalculation = items !== undefined ? items : parsedExistingItems;
+            const additionalChargesForCalculation = additionalCharges !== undefined ? additionalCharges : parsedExistingAdditionalCharges;
+
+
+            // Recalculate totals, ensuring numeric types for taxRate and discountValue
+            const { subtotal, discountAmount, taxAmount, grandTotal } = calculateOrderFormTotal(
+                itemsForCalculation,
+                additionalChargesForCalculation,
+                parseFloat(taxRate ?? existingInvoice.taxRate) || 0, // Ensure numeric, fallback to existing or 0
+                {
+                    enabled: discountEnabled ?? existingInvoice.discountEnabled, // Boolean, fallback to existing
+                    type: discountType || existingInvoice.discountType || null, // String, fallback to existing or null
+                    value: parseFloat(discountValue ?? existingInvoice.discountValue) || 0 // Numeric, fallback to existing or 0
+                }
+            );
+
+            // Prepare the object to update in the database
+            const invoiceToUpdate = {
+                customerId: currentCustomerId,
+                customerActualName: customer.name,
+                currencyCode: customer.currency || 'USD',
+
+                // Fields from req.body, with fallback to existing data if not provided
+                invoiceNumber: invoiceNumber ?? existingInvoice.invoiceNumber,
+                issueDate: issueDate ?? existingInvoice.issueDate,
+                dueDate: dueDate ?? existingInvoice.dueDate,
+
+                // Stringify items and additionalCharges for DB storage
+                items: items !== undefined ? JSON.stringify(items) : JSON.stringify(parsedExistingItems),
+                additionalCharges: additionalCharges !== undefined ? JSON.stringify(additionalCharges) : JSON.stringify(parsedExistingAdditionalCharges),
+
+                taxRate: parseFloat(taxRate ?? existingInvoice.taxRate) || 0,
+                discountEnabled: discountEnabled ?? existingInvoice.discountEnabled,
+                discountDescription: discountDescription || existingInvoice.discountDescription || null,
+                discountType: discountType || existingInvoice.discountType || null,
+                discountValue: parseFloat(discountValue ?? existingInvoice.discountValue) || 0,
+                discountAmount: discountAmount, // Calculated value
+
+                msaContent: msaContent || existingInvoice.msaContent || null,
+                // Handle msaCoverPageTemplateId: if incoming is '', set to null; otherwise use incoming or existing
+                msaCoverPageTemplateId: (msaCoverPageTemplateId === '' || msaCoverPageTemplateId === undefined)
+                                        ? (existingInvoice.msaCoverPageTemplateId || null)
+                                        : msaCoverPageTemplateId,
+                termsAndConditions: termsAndConditions || existingInvoice.termsAndConditions || null,
+                status: status || existingInvoice.status,
+
+                paymentTerms: paymentTerms || existingInvoice.paymentTerms || null,
+                customPaymentTerms: customPaymentTerms || existingInvoice.customPaymentTerms || null,
+                commitmentPeriod: commitmentPeriod || existingInvoice.commitmentPeriod || null,
+                customCommitmentPeriod: customCommitmentPeriod || existingInvoice.customCommitmentPeriod || null,
+                paymentFrequency: paymentFrequency || existingInvoice.paymentFrequency || null,
+                customPaymentFrequency: customPaymentFrequency || existingInvoice.customPaymentFrequency || null,
+
+                serviceStartDate: serviceStartDate ?? existingInvoice.serviceStartDate,
+                serviceEndDate: serviceEndDate ?? existingInvoice.serviceEndDate,
+
+                // Calculated totals
+                subtotal: subtotal,
+                taxAmount: taxAmount,
+                total: grandTotal,
+            };
+
+            console.log("DEBUG: invoiceToUpdate payload for Supabase:", invoiceToUpdate);
+
+            const { data, error } = await supabase
+                .from('invoice')
+                .update(invoiceToUpdate)
+                .eq('id', invoiceId)
+                .select()
+                .single();
+
+            if (error) {
+                console.error(`Supabase update error for invoice ${invoiceId}:`, error.message);
+                if (error.code === '23505') { // Unique constraint violation
+                    return void res.status(409).json({ error: 'Duplicate invoice number or other unique constraint violation.', details: error.message });
+                }
+                return void res.status(500).json({ error: 'Failed to update invoice in database.', details: error.message });
+            }
+            if (!data) { // If data is null, it means no row was found or updated
+                return void res.status(404).json({ error: 'Invoice not found or no changes made.' });
+            }
+            console.log("DEBUG: Invoice updated successfully:", data);
+            return void res.json(data);
+        } catch (error: any) {
+            console.error('Unexpected error in PUT /api/invoices/:id:', error.message, error.stack);
+            return void res.status(500).json({ error: 'Internal server error.' });
+        }
+    }));
 
   // DELETE invoice by ID
   router.delete('/:id', asyncHandler(async (req, res) => {

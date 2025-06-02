@@ -136,11 +136,11 @@ export const createBrandingSettingsRouter = ({ supabase }: RouterOptions) => {
 const logoFile = (req.files as { [fieldname: string]: Express.Multer.File[] })?.logoFile?.[0];
 const signatureFile = (req.files as { [fieldname: string]: Express.Multer.File[] })?.signatureFile?.[0];
 
-            const logo = (req.files as any)?.logoFile?.[0];
-const signature = (req.files as any)?.signatureFile?.[0];
+//             const logo = (req.files as any)?.logoFile?.[0];
+// const signature = (req.files as any)?.signatureFile?.[0];
 
-console.log('logo:', logo);
-console.log('signature:', signature);
+console.log('logo:', logoFile);
+console.log('signature:', signatureFile);
             let updatePayload: Record<string, any> = {
                 name: name === 'null' ? null : name,
                 invoicePrefix: invoicePrefix === 'null' ? null : invoicePrefix,
