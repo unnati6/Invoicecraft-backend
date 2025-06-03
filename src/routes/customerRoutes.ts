@@ -134,28 +134,73 @@ export const createCustomerRouter = ({ supabase }: RouterOptions) => {
     }
   }));
 
-  // Example: DELETE customer by ID
-  router.delete('/:id', asyncHandler(async (req, res) => { 
-    const customerId = req.params.id;
-    try {
-      const { error } = await supabase
-        .from('customer')
-        .delete()
-        .eq('id', customerId);
+    // DELETE customer by ID - CORRECTED COLUMN NAME
+    router.delete('/:id', asyncHandler(async (req, res) => {
+        const customerId = req.params.id;
+        console.log(`[Backend] Attempting to delete customer with ID: ${customerId}`);
 
-      if (error) {
-        console.error(`Error deleting customer ${customerId}:`, error.message);
-        res.status(500);
-        throw new Error(error.message);
-      }
-      res.status(204).send().json({message:"Successfully Deleted"});
-      return; 
-    } catch (error: any) {
-      console.error('Unexpected error in DELETE /api/customers/:id:', error.message);
-      res.status(500);
-      throw new Error('Internal server error.');
-    }
-  }));
+        try {
+            // Step 1: Check for associated invoices
+            // Using "customerId" as per your CREATE TABLE statement for invoice
+            const { count: invoiceCount, error: invoiceError } = await supabase
+                .from('invoice')
+                .select('id', { count: 'exact' })
+                .eq('customerId', customerId); // <--- CORRECTED: Using "customerId"
 
-  return router;
+            if (invoiceError) {
+                console.error(`Error checking invoices for customer ${customerId}:`, invoiceError.message);
+                res.status(500);
+                throw new Error(invoiceError.message);
+            }
+
+            // Step 2: Check for associated order forms
+            // You need to confirm the actual column name for customer ID in your 'orderform' table.
+            // Assuming it's also "customerId" based on common naming conventions,
+            // but VERIFY THIS IN YOUR SUPABASE orderform TABLE.
+            const { count: orderFormCount, error: orderFormError } = await supabase
+                .from('order_form')
+                .select('id', { count: 'exact' })
+                .eq('customerId', customerId); // <--- ASSUMPTION: Using "customerId" for orderform as well. VERIFY THIS!
+
+            if (orderFormError) {
+                console.error(`Error checking order forms for customer ${customerId}:`, orderFormError.message);
+                res.status(500);
+                throw new Error(orderFormError.message);
+            }
+
+            // If any linked record is found (either invoices or order forms)
+            if ((invoiceCount && invoiceCount > 0) || (orderFormCount && orderFormCount > 0)) {
+                console.log(`Customer ${customerId} has linked invoices or order forms. Cannot delete.`);
+                res.status(409).json({ // 409 Conflict is appropriate here
+                    error: 'Cannot delete customer: Linked orders exist.'
+                });
+                return;
+            }
+
+            // Step 3: If no linked records, proceed with deletion
+            const { error: deleteError } = await supabase
+                .from('customer')
+                .delete()
+                .eq('id', customerId);
+
+            if (deleteError) {
+                console.error(`Error deleting customer ${customerId}:`, deleteError.message);
+                res.status(500);
+                throw new Error(deleteError.message);
+            }
+
+            console.log(`Customer ${customerId} successfully deleted.`);
+            res.status(200).json({ message: 'Customer successfully deleted.' });
+            return;
+
+        } catch (error: any) {
+            console.error('Unexpected error in DELETE /api/customers/:id:', error.message);
+            if (!res.headersSent) {
+                res.status(500);
+            }
+            throw new Error('Internal server error.');
+        }
+    }));
+
+    return router;
 };

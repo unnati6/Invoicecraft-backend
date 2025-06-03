@@ -11,9 +11,9 @@ export const createAuthRouter = ({ supabase }: RouterOptions) => {
 
   // SIGNUP route
   router.post('/signup', asyncHandler(async (req, res) => {
-    const { email, password, name } = req.body;
+    const { email, password, fullName } = req.body;
 
-    if (!email || !password || !name) {
+    if (!email || !password || !fullName) {
       res.status(400);
       throw new Error('Name, email, and password are required.');
     }
@@ -36,7 +36,7 @@ export const createAuthRouter = ({ supabase }: RouterOptions) => {
         .insert([
           {
             id: user.id,        // link to auth.users
-            full_name: name,
+            full_name: fullName,
             email,
           },
         ]);
@@ -54,32 +54,52 @@ export const createAuthRouter = ({ supabase }: RouterOptions) => {
     });
   }));
 
-  // LOGIN route
-  router.post('/login', asyncHandler(async (req, res) => {
-    const { email, password } = req.body;
+   router.post('/login', asyncHandler(async (req, res) => {
+        const { email, password } = req.body;
 
-    if (!email || !password) {
-      res.status(400);
-      throw new Error('Email and password are required.');
-    }
+        if (!email || !password) {
+            res.status(400);
+            throw new Error('Email and password are required.');
+        }
 
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+        const { data, error } = await supabase.auth.signInWithPassword({
+            email,
+            password,
+        });
 
-    if (error) {
-      console.error('Login error:', error.message);
-      res.status(401);
-      throw new Error(error.message);
-    }
+        if (error) {
+            console.error('Login error:', error.message);
+            res.status(401);
+            // Map Supabase error messages to more user-friendly ones if desired
+            let errorMessage = error.message;
+            if (error.message.includes('Invalid login credentials')) {
+                errorMessage = 'Invalid email or password.';
+            } else if (error.message.includes('Email not confirmed')) {
+                errorMessage = 'Please confirm your email address before logging in.';
+            }
+            throw new Error(errorMessage); // Throwing the mapped error
+        }
 
-    res.status(200).json({
-      message: 'Login successful.',
-      session: data.session,
-      user: data.user,
-    });
-  }));
+        // Ensure session and user data exist after successful login
+        if (!data.session || !data.user) {
+            console.error('Login successful with Supabase but no session or user data returned.');
+            res.status(500);
+            throw new Error('Internal server error: Failed to retrieve user session.');
+        }
 
-  return router;
+        // --- CORRECTED RESPONSE HERE ---
+        res.status(200).json({
+            message: 'Login successful.',
+            accessToken: data.session.access_token, // <--- Access token directly
+            refreshToken: data.session.refresh_token, // <--- Refresh token directly
+            user: { // You can still include the user object if needed
+                id: data.user.id,
+                email: data.user.email,
+                // Add any other user properties you want from data.user here
+                // e.g., full_name: data.user.user_metadata?.full_name,
+            },
+        });
+    }));
+
+    return router;
 };

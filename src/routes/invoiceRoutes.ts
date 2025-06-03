@@ -88,7 +88,7 @@ export const createInvoiceRouter = ({ supabase }: RouterOptions) => {
         discountType,
         discountValue,
         msaContent,
-        msaCoverPageTemplateId,
+        msacoverpagetemplateid,
         termsAndConditions,
         status,
         paymentTerms,
@@ -138,7 +138,7 @@ export const createInvoiceRouter = ({ supabase }: RouterOptions) => {
           discountValue,
           discountAmount, // Add the calculated 'discountAmount' here
           msaContent,
-          msaCoverPageTemplateId: msaCoverPageTemplateId === '' ? null : msaCoverPageTemplateId,
+          msacoverpagetemplateid: msacoverpagetemplateid === '' ? null : msacoverpagetemplateid,
           termsAndConditions,
           status,
           paymentTerms,
@@ -238,7 +238,7 @@ export const createInvoiceRouter = ({ supabase }: RouterOptions) => {
             discountType,
             discountValue,
             msaContent,
-            msaCoverPageTemplateId,
+            msacoverpagetemplateid,
             termsAndConditions,
             status,
             paymentTerms,
@@ -263,7 +263,7 @@ export const createInvoiceRouter = ({ supabase }: RouterOptions) => {
                     customerId, items, additionalCharges, taxRate,
                     discountEnabled, discountType, discountValue, discountDescription,
                     paymentTerms, customPaymentTerms, commitmentPeriod, customCommitmentPeriod, paymentFrequency, customPaymentFrequency,
-                    msaContent, msaCoverPageTemplateId, termsAndConditions, status,
+                    msaContent, msacoverpagetemplateid, termsAndConditions, status,
                     invoiceNumber, issueDate, dueDate, serviceStartDate, serviceEndDate,
                     customerActualName, currencyCode, subtotal, taxAmount, discountAmount, total
                 `) // Select all fields needed for potential fallbacks and recalculation
@@ -337,10 +337,10 @@ export const createInvoiceRouter = ({ supabase }: RouterOptions) => {
                 discountAmount: discountAmount, // Calculated value
 
                 msaContent: msaContent || existingInvoice.msaContent || null,
-                // Handle msaCoverPageTemplateId: if incoming is '', set to null; otherwise use incoming or existing
-                msaCoverPageTemplateId: (msaCoverPageTemplateId === '' || msaCoverPageTemplateId === undefined)
-                                        ? (existingInvoice.msaCoverPageTemplateId || null)
-                                        : msaCoverPageTemplateId,
+                // Handle msacoverpagetemplateid: if incoming is '', set to null; otherwise use incoming or existing
+                msacoverpagetemplateid: (msacoverpagetemplateid === '' || msacoverpagetemplateid === undefined)
+                                        ? (existingInvoice.msacoverpagetemplateid || null)
+                                        : msacoverpagetemplateid,
                 termsAndConditions: termsAndConditions || existingInvoice.termsAndConditions || null,
                 status: status || existingInvoice.status,
 
