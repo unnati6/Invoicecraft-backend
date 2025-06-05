@@ -4,7 +4,7 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import * as admin from 'firebase-admin';
+
 import asyncHandler from 'express-async-handler';
 
 // Route files import
@@ -18,28 +18,6 @@ import { createTermsTemplateRouter } from './routes/templateRoutes/termsTemplate
 import { createItemRepositoryRouter } from  './routes/itemrepositort';
 import { createAuthRouter } from './routes/authenticationRoute';
 import { createPurchaseOrderRouter } from './routes/purchaseOrderRoutes';
-declare module 'express-serve-static-core' {
-  interface Request {
-    user?: admin.auth.DecodedIdToken;
-  }
-}
-
-const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
-
-if (serviceAccountPath) {
-  try {
-    const serviceAccount = require(serviceAccountPath);
-    console.log('DEBUG: Service account loaded successfully.');
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount)
-    });
-    console.log('Firebase Admin SDK initialized.');
-  } catch (error : any) {
-    console.error('Error initializing Firebase Admin SDK. Check FIREBASE_SERVICE_ACCOUNT_PATH:', error);
-  }
-} else {
-  console.warn('FIREBASE_SERVICE_ACCOUNT_PATH not set. Firebase authentication features will be unavailable.');
-}
 
 
 const app = express();
@@ -47,9 +25,7 @@ const PORT = process.env.PORT || 5000;
 
 app.use(express.json());
 app.use(cors({
-    origin: ['http://localhost:3000', 'https://your-firebase-project-id.web.app'
-     ,'https://9000-firebase-studio-1747723924581.cluster-ikxjzjhlifcwuroomfkjrx437g.cloudworkstations.dev'
-    ,'http://localhost:9002'
+    origin: ['http://localhost:3000'   ,'http://localhost:9002'
      ,'https://invoicecraft-frontend.vercel.app'
   ],
   
@@ -80,33 +56,6 @@ if (!supabaseUrl || !supabaseKey) {
   }
   testSupabaseConnection();
 }
-
-// Authentication Middleware
-const authenticateToken = asyncHandler(async (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  const authHeader = req.headers.authorization;
-
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    res.status(401);
-    throw new Error('Authorization header missing or invalid format.');
-  }
-
-  const idToken = authHeader.split('Bearer ')[1];
-
-  if (!admin.apps.length) {
-      res.status(500);
-      throw new Error('Firebase Admin SDK not initialized. Authentication is unavailable.');
-  }
-
-  try {
-    const decodedToken = await admin.auth().verifyIdToken(idToken);
-    req.user = decodedToken;
-    next();
-  } catch (error: any) {
-    console.error('Error verifying Firebase ID token:', error.message);
-    res.status(403);
-    throw new Error('Unauthorized: Invalid or expired token.');
-  }
-});
 
 app.use((req, res, next) => {
     console.log(`[BACKEND REQUEST] ${req.method} ${req.originalUrl}`);

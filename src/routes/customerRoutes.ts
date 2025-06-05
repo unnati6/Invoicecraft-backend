@@ -33,14 +33,17 @@ export const createCustomerRouter = ({ supabase }: RouterOptions) => {
 
   // POST a new customer
   router.post('/', asyncHandler(async (req, res) => {
-    const { name, email, phone, currency, billingAddress, shippingAddress } = req.body;
+    const { firstname,lastname, email, phone, currency,company, billingAddress, shippingAddress } = req.body;
   console.log("DEBUG: [customerRoutes.ts] Received data for new customer:", req.body);
-
+const fullName = `${firstname} ${lastname}`.trim();
     try {
       const { data, error } = await supabase
         .from('customer')
         .insert([{
-          name,
+          firstname,
+          lastname,
+          name:fullName,
+          company,
           email,
           phone,
           currency,
@@ -98,12 +101,14 @@ export const createCustomerRouter = ({ supabase }: RouterOptions) => {
 
   router.put('/:id', asyncHandler(async (req, res) => {
     const customerId = req.params.id;
-  const { name, email, phone, currency, billingAddress, shippingAddress } = req.body;
+  const { firstname,lastname, email, phone, currency,company, billingAddress, shippingAddress } = req.body;
       const updateData = {
-        name,
+        firstname,
+        lastname,
         email,
         phone,
         currency,
+        company,
         // यहाँ camelCase को snake_case में मैप करें यदि Supabase ऐसे कॉलम नामों का उपयोग करता है
         billingAddress: billingAddress,
         shippingAddress: shippingAddress,
