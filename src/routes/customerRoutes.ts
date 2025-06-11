@@ -32,39 +32,62 @@ export const createCustomerRouter = ({ supabase }: RouterOptions) => {
   }));
 
   // POST a new customer
-  router.post('/', asyncHandler(async (req, res) => {
-    const { firstname,lastname, email, phone, currency,company, billingAddress, shippingAddress } = req.body;
+ // POST a new customer
+router.post('/', asyncHandler(async (req, res:any) => {
+  const { firstname, lastname, email, phone, currency, company, billingAddress, shippingAddress } = req.body;
   console.log("DEBUG: [customerRoutes.ts] Received data for new customer:", req.body);
-const fullName = `${firstname} ${lastname}`.trim();
-    try {
-      const { data, error } = await supabase
-        .from('customer')
-        .insert([{
-          firstname,
-          lastname,
-          name:fullName,
-          company,
-          email,
-          phone,
-          currency,
-          "billingAddress": billingAddress,
-          "shippingAddress": shippingAddress
-        }])
-        .select();
+  const fullName = `${firstname} ${lastname}`.trim();
 
-      if (error) {
-        console.error('Error creating customer:', error.message);
-        res.status(500);
-        throw new Error(error.message);
-      }
-      res.status(201).json(data[0]);
-      return; 
-    } catch (error: any) {
-      console.error('Unexpected error in POST /api/customers:', error.message);
+  try {
+    // Check if a customer already exists with this email
+    const { data: existingCustomer, error: emailCheckError } = await supabase
+      .from('customer')
+      .select('id')
+      .eq('email', email)
+      .maybeSingle(); // even if no match, returns null instead of throwing error
+
+    if (emailCheckError) {
+      console.error('Error checking existing email:', emailCheckError.message);
       res.status(500);
-      throw new Error('Internal server error.');
+      throw new Error(emailCheckError.message);
     }
-  }));
+
+    if (existingCustomer) {
+      // If customer already exists with that email
+      return res.status(409).json({ error: 'A customer with this email already exists.' });
+    }
+
+    // If email is unique, insert new customer
+    const { data, error } = await supabase
+      .from('customer')
+      .insert([{
+        firstname,
+        lastname,
+        name: fullName,
+        company,
+        email,
+        phone,
+        currency,
+        billingAddress,
+        shippingAddress
+      }])
+      .select();
+
+    if (error) {
+      console.error('Error creating customer:', error.message);
+      res.status(500);
+      throw new Error(error.message);
+    }
+
+    res.status(201).json(data[0]);
+    return;
+
+  } catch (error: any) {
+    console.error('Unexpected error in POST /api/customers:', error.message);
+    res.status(500);
+    throw new Error('Internal server error.');
+  }
+}));
 
   // Example: GET customer by ID (assuming 'id' is a UUID)
   router.get('/:id', asyncHandler(async (req, res) => {
