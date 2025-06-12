@@ -25,7 +25,7 @@ const PORT = process.env.PORT || 5000;
 
 app.use(express.json());
 app.use(cors({
-    origin: ['http://localhost:3000', 'http://localhost:9002', '*'], // '*' का उपयोग प्रोडक्शन में सावधानी से करें
+    origin: ['http://localhost:3000', 'http://localhost:9002', 'https://invoicecraft-murex.vercel.app/'], // '*' का उपयोग प्रोडक्शन में सावधानी से करें
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true
