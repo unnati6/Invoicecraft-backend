@@ -152,10 +152,8 @@ router.post(
       // For security, always send a generic success message even if email not found.
       // This prevents enumerating valid user emails.
       console.log(`[Forgot Password] User not found or error for email: ${email}`);
-      return res.status(200).json({
-        message:
-          'If an account exists for this email, a password reset link has been sent. Please check your inbox (and spam folder).',
-      });
+      return res.status(404).json({ message: 'User with this email does not exist.' });
+   
     }
 
     // 2. Generate a unique, time-limited token
@@ -280,29 +278,36 @@ router.post(
       return res.status(400).json({ message: 'Email and password are required.' });
     }
 
-    // Supabase के built-in signInWithPassword विधि का उपयोग करें
+    // 👇 Step 1: Check if user exists by email
+    const { data: existingUser, error: userCheckError } = await supabase
+      .from('profiles')
+      .select('id')
+      .eq('email', email)
+      .single();
+
+    if (userCheckError || !existingUser) {
+      // 👈 User not found
+      return res.status(404).json({ message: 'User does not exist.' });
+    }
+
+    // 👇 Step 2: Try to log in now that we know user exists
     const { data, error: authError } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
 
     if (authError) {
-      console.error('[Login] Supabase Auth Error:', authError.message);
-      // Supabase आमतौर पर गलत क्रेडेंशियल के लिए "Invalid login credentials" देता है
       return res.status(401).json({ message: 'Invalid email or password.' });
     }
 
-    // यदि लॉगिन सफल होता है, तो Supabase आपको user और session प्रदान करता है
     const user = data.user;
     const session = data.session;
 
     if (!user || !session) {
-        // यह स्थिति शायद ही कभी होनी चाहिए यदि authError नहीं है, लेकिन सुरक्षा के लिए
-        return res.status(401).json({ message: 'Authentication failed.' });
+      return res.status(401).json({ message: 'Authentication failed.' });
     }
 
-    // Optional: Check if email is confirmed (if you have an email_confirmed column in your 'profiles' table)
-    // Supabase की `auth.users` तालिका में email_confirmed नहीं होता है, लेकिन आप अपनी `profiles` तालिका में इसे जांच सकते हैं
+    // 👇 Step 3: Optional email confirmation check
     const { data: profileData, error: profileCheckError } = await supabase
       .from('profiles')
       .select('email_confirmed')
@@ -310,26 +315,19 @@ router.post(
       .single();
 
     if (profileCheckError || !profileData || !profileData.email_confirmed) {
-      // यदि ईमेल पुष्टि की आवश्यकता है और यह नहीं हुई है
-      // Supabase auth.signOut() का उपयोग करके सेशन को तुरंत खत्म कर सकते हैं
-      await supabase.auth.signOut(); // महत्वपूर्ण: यदि ईमेल की पुष्टि नहीं हुई है तो सेशन समाप्त करें
-      console.log('[Login] Email not confirmed for user:', email);
+      await supabase.auth.signOut();
       return res.status(401).json({ message: 'Please confirm your email address to log in.' });
     }
 
-    console.log('[Login] User logged in successfully via Supabase Auth:', user.email);
-    // आपको क्लाइंट को एक सेशन टोकन भेजना चाहिए जो Supabase द्वारा प्रबंधित होता है
-    // Frontend Supabase क्लाइंट को इस सेशन का उपयोग करने के लिए पुनर्निर्देशित कर सकता है
-    // या आप यहां एक कस्टम JWT भी उत्पन्न कर सकते हैं यदि आप Supabase के सत्रों को पूरी तरह से बायपास करना चाहते हैं।
-    // Supabase के साथ, उपयोगकर्ता आमतौर पर अपनी क्लाइंट-साइड लाइब्रेरी का उपयोग करके सीधे सत्र को संभालते हैं।
-    // लेकिन यदि आप एक कस्टम JWT चाहते हैं, तो JWT_SECRET का उपयोग करें।
-    const jwt = require('jsonwebtoken'); // सुनिश्चित करें कि आपने 'jsonwebtoken' को import किया है
-    const customToken = jwt.sign({ userId: user.id, email: user.email }, process.env.JWT_SECRET!, { expiresIn: '1h' });
+    const jwt = require('jsonwebtoken');
+    const customToken = jwt.sign({ userId: user.id, email: user.email }, process.env.JWT_SECRET!, {
+      expiresIn: '1h',
+    });
 
     return res.status(200).json({
       message: 'Login successful',
-      token: customToken, // आपका कस्टम JWT
-      user: { id: user.id, email: user.email, session: session } // Supabase सत्र जानकारी भी भेजें
+      token: customToken,
+      user: { id: user.id, email: user.email, session: session },
     });
   })
 );
