@@ -1,4 +1,3 @@
-// validators/authValidators.ts
 import Joi from 'joi';
 
 export const signupSchema = Joi.object({
@@ -6,7 +5,7 @@ export const signupSchema = Joi.object({
     'string.empty': 'Email is required.',
     'string.email': 'Please enter a valid email.',
   }),
- password: Joi.string()
+  password: Joi.string()
     .min(12)
     .pattern(new RegExp('(?=.*[a-z])'), 'lowercase letter')
     .pattern(new RegExp('(?=.*[A-Z])'), 'uppercase letter')
@@ -32,9 +31,14 @@ export const loginSchema = Joi.object({
     'string.empty': 'Password is required.',
   }),
 });
-const authValidators = {
-  signupSchema,
-  loginSchema,
-};
 
-export default authValidators;
+// Since you're using named exports (export const), a default export like this
+// isn't strictly necessary if you only import the named exports.
+// However, if other parts of your code expect a default export, you can keep it.
+// For ES Modules, it would be:
+// const authValidators = {
+//   signupSchema,
+//   loginSchema,
+// };
+// export default authValidators;
+// Or, simply import the named exports directly where needed.

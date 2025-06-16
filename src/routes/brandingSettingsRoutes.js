@@ -1,33 +1,37 @@
-// src/routes/brandingSettingsRoutes.ts
 import express from 'express';
-import { SupabaseClient } from '@supabase/supabase-js';
+// SupabaseClient is a type, so it's not needed in JS for import here.
+// The supabase object is passed into the router factory.
 import asyncHandler from 'express-async-handler';
 import multer from 'multer';
 
 const upload = multer({
     storage: multer.memoryStorage(),
     limits: {
-        fileSize: 3 * 1024 * 1024, // MB limit per file
+        fileSize: 3 * 1024 * 1024, // 3 MB limit per file
     },
     fileFilter: (req, file, cb) => {
-        if (['image/jpeg', 'image/png', 'image/svg+xml', 'image/jpg','image/png'].includes(file.mimetype)) {
+        // Corrected the typo in the error message
+        if (['image/jpeg', 'image/png', 'image/svg+xml', 'image/jpg'].includes(file.mimetype)) {
             cb(null, true);
         } else {
-            cb(new Error('Invalid file type. Only  or SVG are allowed.'));
+            cb(new Error('Invalid file type. Only JPEG, PNG, JPG, or SVG images are allowed.'));
         }
     }
 });
 
-interface RouterOptions {
-    supabase: SupabaseClient;
-    // authenticateToken: express.RequestHandler; // uncomment when adding auth
-}
-
-export const createBrandingSettingsRouter = ({ supabase }: RouterOptions) => {
+// The RouterOptions interface is a TypeScript construct and is removed in JavaScript.
+// export const createBrandingSettingsRouter = ({ supabase }: RouterOptions) => {
+// The export statement is now directly applied to the function.
+export const createBrandingSettingsRouter = ({ supabase }) => {
     const router = express.Router();
 
     const BRANDING_ASSETS_BUCKET = 'branding-assets';
 
+    /**
+     * Fetches existing branding settings or creates a new default record if none exist.
+     * This ensures there's always a record to update.
+     * @returns {Promise<Object>} The branding settings record.
+     */
     async function getOrCreateBrandingSettingsRecord() {
         const { data, error } = await supabase
             .from('branding_settings')
@@ -45,7 +49,7 @@ export const createBrandingSettingsRouter = ({ supabase }: RouterOptions) => {
             const { data: newRecord, error: createError } = await supabase
                 .from('branding_settings')
                 .insert({})
-                .select();
+                .select(); // Use .select() to return the inserted data
 
             if (createError) {
                 console.error('Error creating initial branding settings record:', createError.message);
@@ -55,7 +59,12 @@ export const createBrandingSettingsRouter = ({ supabase }: RouterOptions) => {
         }
     }
 
-    async function deleteAssetFromStorage(url: string): Promise<boolean> {
+    /**
+     * Deletes an asset from Supabase Storage based on its public URL.
+     * @param {string} url - The public URL of the asset to delete.
+     * @returns {Promise<boolean>} True if deletion was successful or asset was not found, false otherwise.
+     */
+    async function deleteAssetFromStorage(url) { // Removed type annotations
         if (!url) return false;
         try {
             const publicUrlPrefix = `storage/v1/object/public/${BRANDING_ASSETS_BUCKET}/`;
@@ -82,7 +91,6 @@ export const createBrandingSettingsRouter = ({ supabase }: RouterOptions) => {
 
             if (error) {
                 // Handle cases where the asset might already be gone (e.g., 404 equivalent)
-                // Supabase StorageError might not have statusCode directly, check message
                 if (error.message.includes('The resource was not found') || error.message.includes('not found')) {
                     console.log(`Asset ${fileNameInStorage} not found in storage (likely already deleted or never existed).`);
                     return true; // Treat as success if it's already gone
@@ -92,20 +100,62 @@ export const createBrandingSettingsRouter = ({ supabase }: RouterOptions) => {
             }
             console.log(`Successfully deleted asset: ${fileNameInStorage}.`);
             return true;
-        } catch (error) {
+        } catch (error) { // Removed `: any` type annotation
             console.error(`Unexpected error in deleteAssetFromStorage for URL ${url}:`, error);
             return false;
         }
     }
 
 
-    // GET branding settings
-    router.get('/', asyncHandler(async (req, res) => {
+    // GET branding settings for the authenticated user
+    router.get('/', asyncHandler(async (req, res) => { // Removed type annotations
+        // The authenticateToken middleware should have added req.user
+        const userId = req.user?.id;
+        if (!userId) {
+            return res.status(401).json({ message: 'User not authenticated.' });
+        }
+
         try {
-            const settings = await getOrCreateBrandingSettingsRecord();
+            // Modify to fetch settings for the specific user
+            const { data, error } = await supabase
+                .from('branding_settings')
+                .select('*')
+                .eq('user_id', userId) // Filter by user ID
+                .limit(1);
+
+            let settings;
+            if (error) {
+                console.error('Error fetching branding settings:', error.message);
+                // If there's an error, try to create a new record for the user
+                // This assumes branding_settings has RLS to allow inserts by user_id
+                const { data: newRecord, error: createError } = await supabase
+                    .from('branding_settings')
+                    .insert({ user_id: userId }) // Associate with current user
+                    .select();
+
+                if (createError) {
+                    console.error('Error creating initial branding settings record for user:', createError.message);
+                    throw new Error('Failed to fetch or create branding settings.');
+                }
+                settings = newRecord[0];
+            } else if (data && data.length > 0) {
+                settings = data[0];
+            } else {
+                // No settings found for the user, create a new one
+                const { data: newRecord, error: createError } = await supabase
+                    .from('branding_settings')
+                    .insert({ user_id: userId }) // Associate with current user
+                    .select();
+
+                if (createError) {
+                    console.error('Error creating initial branding settings record for user:', createError.message);
+                    throw new Error('Failed to fetch or create branding settings.');
+                }
+                settings = newRecord[0];
+            }
+
             res.status(200).json(settings);
-            // No explicit return here, asyncHandler handles Promise<void>
-        } catch (error: any) {
+        } catch (error) { // Removed type annotation
             console.error('Unexpected error in GET /api/branding-settings:', error.message);
             res.status(500).json({ error: 'Internal server error.', details: error.message });
         }
@@ -117,7 +167,13 @@ export const createBrandingSettingsRouter = ({ supabase }: RouterOptions) => {
             { name: 'logoFile', maxCount: 1 },
             { name: 'signatureFile', maxCount: 1 }
         ]),
-        asyncHandler(async (req, res) => {
+        asyncHandler(async (req, res) => { // Removed type annotations
+            // The authenticateToken middleware should have added req.user
+            const userId = req.user?.id;
+            if (!userId) {
+                return res.status(401).json({ message: 'User not authenticated.' });
+            }
+
             const {
                 name,
                 invoicePrefix,
@@ -133,15 +189,15 @@ export const createBrandingSettingsRouter = ({ supabase }: RouterOptions) => {
                 signatureUrl: formDataSignatureUrl,
                 ...restOfBody
             } = req.body;
-const logoFile = (req.files as { [fieldname: string]: Express.Multer.File[] })?.logoFile?.[0];
-const signatureFile = (req.files as { [fieldname: string]: Express.Multer.File[] })?.signatureFile?.[0];
 
-//             const logo = (req.files as any)?.logoFile?.[0];
-// const signature = (req.files as any)?.signatureFile?.[0];
+            // Access files directly from req.files, removing TypeScript type casting
+            const logoFile = req.files?.logoFile?.[0];
+            const signatureFile = req.files?.signatureFile?.[0];
 
-console.log('logo:', logoFile);
-console.log('signature:', signatureFile);
-            let updatePayload: Record<string, any> = {
+            console.log('logo:', logoFile);
+            console.log('signature:', signatureFile);
+
+            let updatePayload = {
                 name: name === 'null' ? null : name,
                 invoicePrefix: invoicePrefix === 'null' ? null : invoicePrefix,
                 phone: phone === 'null' ? null : phone,
@@ -151,17 +207,31 @@ console.log('signature:', signatureFile);
                 state: state === 'null' ? null : state,
                 zip: zip === 'null' ? null : zip,
                 country: country === 'null' ? null : country,
-                ...restOfBody
+                ...restOfBody,
+                user_id: userId // Ensure user_id is part of the payload
             };
 
-            const existingSettings = await getOrCreateBrandingSettingsRecord();
+            // Fetch existing settings for the current user
+            const { data: existingSettings, error: fetchSettingsError } = await supabase
+                .from('branding_settings')
+                .select('*')
+                .eq('user_id', userId)
+                .single();
+
+            if (fetchSettingsError || !existingSettings) {
+                // This means no settings record exists for this user, which shouldn't happen if GET creates one
+                // but adding a robust check here.
+                console.error('Error fetching existing branding settings for update:', fetchSettingsError?.message);
+                return res.status(404).json({ error: 'Branding settings not found for this user.' });
+            }
+
             const settingsId = existingSettings.id;
             const oldLogoUrl = existingSettings.logoUrl;
             const oldSignatureUrl = existingSettings.signatureUrl;
 
             // Handle Logo File Upload/Deletion
             if (logoFile) {
-                const fileName = `logo-${Date.now()}-${logoFile.originalname.replace(/\s/g, '_')}`;
+                const fileName = `logo-${userId}-${Date.now()}-${logoFile.originalname.replace(/\s/g, '_')}`; // Include userId in filename
                 const { data, error } = await supabase.storage
                     .from(BRANDING_ASSETS_BUCKET)
                     .upload(fileName, logoFile.buffer, {
@@ -172,8 +242,7 @@ console.log('signature:', signatureFile);
 
                 if (error) {
                     console.error('Error uploading new logo:', error.message);
-                    res.status(500).json({ error: 'Failed to upload new logo.' }); // No return here
-                    return; // Explicit return to stop execution
+                    return res.status(500).json({ error: 'Failed to upload new logo.' });
                 }
                 const { data: publicUrlData } = supabase.storage.from(BRANDING_ASSETS_BUCKET).getPublicUrl(data.path);
                 updatePayload.logoUrl = publicUrlData.publicUrl;
@@ -185,18 +254,15 @@ console.log('signature:', signatureFile);
                 await deleteAssetFromStorage(oldLogoUrl);
                 updatePayload.logoUrl = null;
             } else if (formDataLogoUrl && formDataLogoUrl !== 'null') {
-                // If formDataLogoUrl is an actual URL and no new file was uploaded, preserve it.
                 updatePayload.logoUrl = formDataLogoUrl;
             } else {
-                // If formDataLogoUrl is empty/undefined and no file, it means it's not being set/changed,
-                // so default to existing unless explicitly set to null by frontend.
-                updatePayload.logoUrl = oldLogoUrl;
+                updatePayload.logoUrl = oldLogoUrl; // Keep existing if no change
             }
 
 
             // Handle Signature File Upload/Deletion
             if (signatureFile) {
-                const fileName = `signature-${Date.now()}-${signatureFile.originalname.replace(/\s/g, '_')}`;
+                const fileName = `signature-${userId}-${Date.now()}-${signatureFile.originalname.replace(/\s/g, '_')}`; // Include userId in filename
                 const { data, error } = await supabase.storage
                     .from(BRANDING_ASSETS_BUCKET)
                     .upload(fileName, signatureFile.buffer, {
@@ -207,8 +273,7 @@ console.log('signature:', signatureFile);
 
                 if (error) {
                     console.error('Error uploading new signature:', error.message);
-                    res.status(500).json({ error: 'Failed to upload new signature.' }); // No return here
-                    return; // Explicit return to stop execution
+                    return res.status(500).json({ error: 'Failed to upload new signature.' });
                 }
                 const { data: publicUrlData } = supabase.storage.from(BRANDING_ASSETS_BUCKET).getPublicUrl(data.path);
                 updatePayload.signatureUrl = publicUrlData.publicUrl;
@@ -222,7 +287,7 @@ console.log('signature:', signatureFile);
             } else if (formDataSignatureUrl && formDataSignatureUrl !== 'null') {
                 updatePayload.signatureUrl = formDataSignatureUrl;
             } else {
-                updatePayload.signatureUrl = oldSignatureUrl;
+                updatePayload.signatureUrl = oldSignatureUrl; // Keep existing if no change
             }
 
             // Update the branding_settings table
@@ -231,6 +296,7 @@ console.log('signature:', signatureFile);
                     .from('branding_settings')
                     .update(updatePayload)
                     .eq('id', settingsId)
+                    .eq('user_id', userId) // IMPORTANT: Ensure update is for settings owned by this user
                     .select();
 
                 if (error) {
@@ -238,12 +304,11 @@ console.log('signature:', signatureFile);
                     throw new Error(error.message); // Throwing here will be caught by asyncHandler
                 }
                 if (!data || data.length === 0) {
-                    res.status(404).json({ error: 'Branding settings record not found after attempt to update.' });
+                    res.status(404).json({ error: 'Branding settings record not found for this user after attempt to update.' });
                     return;
                 }
                 res.status(200).json(data[0]);
-                // No explicit return here for res.status.json()
-            } catch (error: any) {
+            } catch (error) { // Removed type annotation
                 console.error('Unexpected error during DB update for branding settings:', error.message);
                 res.status(500).json({ error: 'Internal server error.', details: error.message });
             }
