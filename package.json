@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "node --watch src/server.js"
+    "dev": "node --watch src/server.js",
+       "build": "echo 'No build step required for this backend.'", 
+    "test": "echo \"Error: no test specified\" && exit 1" 
   },
   "keywords": [],
   "author": "",
