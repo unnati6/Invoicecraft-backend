@@ -170,9 +170,12 @@ export const createBrandingSettingsRouter = ({ supabase }) => {
         asyncHandler(async (req, res) => { // Removed type annotations
             // The authenticateToken middleware should have added req.user
             const userId = req.user?.id;
+            console.log('User ID received:', userId)
             if (!userId) {
                 return res.status(401).json({ message: 'User not authenticated.' });
             }
+  console.log('Request Body:', req.body); // ADD THIS LINE
+        console.log('Request Files:', req.files); // ADD THIS LINE
 
             const {
                 name,

@@ -1,9 +1,6 @@
 import express from 'express';
 import asyncHandler from 'express-async-handler';
-
-// No need for declare module or interface RouterOptions in plain JavaScript.
-// The 'req.user' property is assumed to be added by the 'authenticateToken' middleware.
-
+import path from 'path';
 export const createCoverPageTemplateRouter = ({ supabase }) => {
   const router = express.Router();
 
@@ -72,76 +69,149 @@ export const createCoverPageTemplateRouter = ({ supabase }) => {
       throw new Error('Internal server error.');
     }
   }));
+// POST a new Cover Page Template for the authenticated user
+router.post('/', asyncHandler(async (req, res) => {
+  const userId = req.user?.id;
+  if (!userId) {
+    console.error('Authentication error: User ID not found in request for POST /api/cover-page-templates');
+    return res.status(401).json({ message: 'User not authenticated.' });
+  }
 
-  // POST a new Cover Page Template for the authenticated user
-  router.post('/', asyncHandler(async (req, res) => {
-    // Ensure the user is authenticated
-    const userId = req.user?.id;
-    if (!userId) {
-      console.error('Authentication error: User ID not found in request for POST /api/cover-page-templates');
-      return res.status(401).json({ message: 'User not authenticated.' });
+  const {
+    name,
+    title,
+    companyLogoEnabled = true,
+    clientLogoEnabled = true,
+    additionalImage1Enabled = false,
+    additionalImage2Enabled = false
+  } = req.body;
+
+  const imageFields = {
+    companyLogoUrl: null,
+    clientLogoUrl: null,
+    additionalImage1Url: null,
+    additionalImage2Url: null
+  };
+
+  // Handle file uploads
+  const uploadFile = async (file, prefix) => {
+    const filename = `${prefix}_${Date.now()}_${file.name}`;
+    const filepath = `uploads/${filename}`;
+    await file.mv(filepath);
+    return `/uploads/${filename}`;
+  };
+
+  try {
+    if (req.files?.companyLogo) {
+      imageFields.companyLogoUrl = await uploadFile(req.files.companyLogo, 'companyLogo');
+    }
+    if (req.files?.clientLogo) {
+      imageFields.clientLogoUrl = await uploadFile(req.files.clientLogo, 'clientLogo');
+    }
+    if (req.files?.additionalImage1) {
+      imageFields.additionalImage1Url = await uploadFile(req.files.additionalImage1, 'additionalImage1');
+    }
+    if (req.files?.additionalImage2) {
+      imageFields.additionalImage2Url = await uploadFile(req.files.additionalImage2, 'additionalImage2');
     }
 
-    const newTemplate = {
-      ...req.body,
-      user_id: userId // IMPORTANT: Associate the new template with the authenticated user
-    };
-    try {
-      const { data, error } = await supabase.from('cover_page_template').insert([newTemplate]).select();
-      if (error) {
-        console.error('Error creating cover page template:', error.message);
-        res.status(500);
-        throw new Error(error.message);
-      }
-      res.status(201).json(data[0]);
-    } catch (error) { // Removed type annotation
-      console.error('Unexpected error in POST /api/cover-page-templates:', error.message);
-      res.status(500);
-      throw new Error('Internal server error.');
+    const { data, error } = await supabase.from('cover_page_template').insert([{
+      name,
+       title: typeof title === 'string' ? title : '',
+      companyLogoEnabled,
+      clientLogoEnabled,
+      additionalImage1Enabled,
+      additionalImage2Enabled,
+      ...imageFields,
+      user_id: userId
+    }]).select();
+
+    if (error) {
+      console.error('Error creating cover page template:', error.message);
+      return res.status(500).json({ error: error.message });
     }
-  }));
+
+    res.status(201).json(data[0]);
+  } catch (err) {
+    console.error('Unexpected error in POST /api/cover-page-templates:', err.message);
+    res.status(500).json({ error: 'Internal server error.' });
+  }
+}));
+
 
   // PUT (Update) Cover Page Template by ID for the authenticated user
   router.put('/:id', asyncHandler(async (req, res) => {
-    // Ensure the user is authenticated
-    const userId = req.user?.id;
-    if (!userId) {
-      console.error('Authentication error: User ID not found in request for PUT /api/cover-page-templates/:id');
-      return res.status(401).json({ message: 'User not authenticated.' });
+  const userId = req.user?.id;
+  if (!userId) {
+    return res.status(401).json({ message: 'User not authenticated.' });
+  }
+
+  const templateId = req.params.id;
+
+  const {
+    name,
+    title,
+    companyLogoEnabled = true,
+    clientLogoEnabled = true,
+    additionalImage1Enabled = false,
+    additionalImage2Enabled = false
+  } = req.body;
+
+  const updates = {
+    name,
+    title,
+    companyLogoEnabled: companyLogoEnabled === 'true' || companyLogoEnabled === true,
+    clientLogoEnabled: clientLogoEnabled === 'true' || clientLogoEnabled === true,
+    additionalImage1Enabled: additionalImage1Enabled === 'true' || additionalImage1Enabled === true,
+    additionalImage2Enabled: additionalImage2Enabled === 'true' || additionalImage2Enabled === true,
+    updated_at: new Date().toISOString()
+  };
+
+  // Handle image uploads
+  const uploadFile = async (file, prefix) => {
+    const fileName = `${prefix}_${Date.now()}_${file.name}`;
+    const uploadPath = path.join('uploads', fileName);
+    await file.mv(uploadPath);
+    return `/uploads/${fileName}`;
+  };
+
+  try {
+    if (req.files?.companyLogo) {
+      updates.companyLogoUrl = await uploadFile(req.files.companyLogo, 'companyLogo');
+    }
+    if (req.files?.clientLogo) {
+      updates.clientLogoUrl = await uploadFile(req.files.clientLogo, 'clientLogo');
+    }
+    if (req.files?.additionalImage1) {
+      updates.additionalImage1Url = await uploadFile(req.files.additionalImage1, 'additionalImage1');
+    }
+    if (req.files?.additionalImage2) {
+      updates.additionalImage2Url = await uploadFile(req.files.additionalImage2, 'additionalImage2');
     }
 
-    const templateId = req.params.id;
-    const updateData = {
-      ...req.body,
-      user_id: userId // Ensure user_id is included in the update payload for security
-    };
+    const { data, error } = await supabase
+      .from('cover_page_template')
+      .update(updates)
+      .eq('id', templateId)
+      .eq('user_id', userId)
+      .select()
+      .single();
 
-    try {
-      // Update by template ID AND user ID
-      const { data, error } = await supabase
-        .from('cover_page_template')
-        .update(updateData)
-        .eq('id', templateId)
-        .eq('user_id', userId) // IMPORTANT: Ensure update is for template owned by this user
-        .select();
-
-      if (error) {
-        console.error(`Error updating cover page template ${templateId} for user ${userId}:`, error.message);
-        res.status(500);
-        throw new Error(error.message);
-      }
-      if (!data || data.length === 0) {
-        // If no data returned, it means either template wasn't found or wasn't owned by this user
-        res.status(404).json({ error: 'Cover Page Template not found or not accessible by this user.' });
-        return;
-      }
-      res.json(data[0]);
-    } catch (error) { // Removed type annotation
-      console.error('Unexpected error in PUT /api/cover-page-templates/:id:', error.message);
-      res.status(500);
-      throw new Error('Internal server error.');
+    if (error) {
+      console.error('Error updating template:', error.message);
+      return res.status(500).json({ message: error.message });
     }
-  }));
+
+    if (!data) {
+      return res.status(404).json({ error: 'Template not found or not accessible.' });
+    }
+
+    res.json(data);
+  } catch (err) {
+    console.error('Unexpected error in PUT /api/cover-page-templates/:id:', err.message);
+    res.status(500).json({ error: 'Internal server error.' });
+  }
+}));
 
   // DELETE Cover Page Template by ID for the authenticated user
   router.delete('/:id', asyncHandler(async (req, res) => {
