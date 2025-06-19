@@ -29,12 +29,6 @@ import path from 'path';
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// ******************** KEY CHANGE FOR BODY PARSERS ********************
-// DO NOT use express.json() globally here.
-// DO NOT use express-fileupload globally here.
-// Instead, apply them only to the specific routes that need them.
-// This prevents conflicts when a route requires a different type of body parsing.
-
 app.use(cors({
   origin: ['http://localhost:3000', 'http://localhost:9002', 'https://invoicecraft-murex.vercel.app'],
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],

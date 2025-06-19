@@ -13,6 +13,8 @@ const transporter = nodemailer.createTransport({
   },
 });
 
+
+
 /**
  * @typedef {Object} SignupEmailOptions
  * @property {string} to
@@ -69,5 +71,69 @@ export const sendPasswordResetEmail = async ({
         <a href="${resetLink}">${resetLink}</a>
         <p>If you didn't request this, ignore the email.</p>
         `,
+  });
+};
+
+/**
+ * @typedef {Object} OrderFormEmailOptions
+ * @property {string} to
+ * @property {string} subject
+ * @property {string} htmlBody
+ * @property {string} pdfBufferBase64
+ * @property {string} orderFormNumber
+ * @property {string} [senderName='InvoiceCraft'] - Optional sender display name
+ */
+
+/**
+ * Sends an Order Form email with a PDF attachment.
+ * @param {OrderFormEmailOptions} options
+ * @returns {Promise<void>}
+ */
+export const sendOrderFormEmail = async ({
+  to,
+  subject,
+  htmlBody,
+  pdfBufferBase64,
+  orderFormNumber,
+  senderName = 'InvoiceCraft' // Default sender name
+}) => {
+  await transporter.sendMail({
+    from: `"${senderName}" <${process.env.SMTP_USER}>`,
+    to,
+    subject,
+    html: htmlBody,
+    attachments: [
+      {
+        filename: `OrderForm_${orderFormNumber || 'untitled'}.pdf`,
+        content: pdfBufferBase64,
+        encoding: 'base64',
+        contentType: 'application/pdf',
+      },
+    ],
+  });
+};
+
+
+export const sendInvoiceEmail = async ({
+  to,
+  subject,
+  htmlBody,
+  pdfBufferBase64,
+  invoiceNumber, // Changed from orderFormNumber
+  senderName = 'InvoiceCraft' // Default sender name
+}) => {
+  await transporter.sendMail({
+    from: `"${senderName}" <${process.env.SMTP_USER}>`,
+    to,
+    subject,
+    html: htmlBody,
+    attachments: [
+      {
+        filename: `Invoice_${invoiceNumber || 'untitled'}.pdf`, // Changed filename convention
+        content: pdfBufferBase64,
+        encoding: 'base64',
+        contentType: 'application/pdf',
+      },
+    ],
   });
 };

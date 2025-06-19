@@ -1,12 +1,7 @@
 import express from 'express';
 import asyncHandler from 'express-async-handler';
-
-// Helper function to calculate totals - Ensure .js extension for local imports
 import { calculateOrderFormTotal } from '../utils/calculations.js';
-
-// No need for declare module or interface RouterOptions in plain JavaScript.
-// The 'req.user' property is assumed to be added by the 'authenticateToken' middleware.
-
+import { sendOrderFormEmail } from '../utils/sendEmail.js';
 export const createOrderFormRouter = ({ supabase }) => {
   const router = express.Router();
 
@@ -53,7 +48,7 @@ export const createOrderFormRouter = ({ supabase }) => {
     }
   }));
 
-   // NEW: GET the next available order form number for the authenticated user
+  // NEW: GET the next available order form number for the authenticated user
   // This endpoint uses your existing get_next_order_form_sequence RPC.
   // Since your RPC only *reads* the max number and adds 1 (without persistently incrementing a database sequence),
   // it's safe to call this for displaying the next number without creating gaps.
@@ -178,120 +173,120 @@ export const createOrderFormRouter = ({ supabase }) => {
     let orderFormPrefix = 'OF-'; // Default prefix
 
     try {
-        // --- Get Prefix from Branding Settings ---
-        const { data: brandingSettings, error: brandingError } = await supabase
-            .from('branding_settings')
-            .select('orderFormPrefix')
-            .eq('user_id', userId)
-            .single();
+      // --- Get Prefix from Branding Settings ---
+      const { data: brandingSettings, error: brandingError } = await supabase
+        .from('branding_settings')
+        .select('orderFormPrefix')
+        .eq('user_id', userId)
+        .single();
 
-        if (brandingError || !brandingSettings) {
-            console.warn(`Branding settings not found for user ${userId}. Using default order form prefix 'OF-'. Error: ${brandingError?.message}`);
-            // No need to create default branding settings here, as the prefix is just for generation.
-            // The user will typically set branding settings once.
-        } else {
-            orderFormPrefix = brandingSettings.orderFormPrefix || 'OF-'; // Use retrieved prefix or default
+      if (brandingError || !brandingSettings) {
+        console.warn(`Branding settings not found for user ${userId}. Using default order form prefix 'OF-'. Error: ${brandingError?.message}`);
+        // No need to create default branding settings here, as the prefix is just for generation.
+        // The user will typically set branding settings once.
+      } else {
+        orderFormPrefix = brandingSettings.orderFormPrefix || 'OF-'; // Use retrieved prefix or default
+      }
+
+      // --- Generate Next Order Form Number using RPC Function ---
+      const { data: nextNumber, error: rpcError } = await supabase.rpc('get_next_order_form_sequence', {
+        p_user_id: userId,
+        p_prefix: orderFormPrefix
+      });
+
+      if (rpcError) {
+        console.error('Error calling get_next_order_form_sequence RPC:', rpcError.message);
+        return res.status(500).json({ error: 'Failed to generate next order form number.', details: rpcError.message });
+      }
+
+      const newOrderFormNumberValue = nextNumber; // The RPC already returns the incremented value
+      const formattedNumber = String(newOrderFormNumberValue).padStart(3, '0'); // Pad with leading zeros
+      generatedOrderFormNumber = `${orderFormPrefix}${formattedNumber}`;
+
+      console.log(`Generated Order Form Number for user ${userId}: ${generatedOrderFormNumber}`);
+
+      // --- Rest of your original POST logic ---
+      // 1. Fetch customer details (name and currency) for the current user
+      const { data: customer, error: customerError } = await supabase
+        .from('customer')
+        .select('name, currency')
+        .eq('id', customerId)
+        .eq('user_id', userId)
+        .single();
+
+      if (customerError || !customer) {
+        console.error("Error fetching customer for order form:", customerError?.message || "Customer not found.");
+        return res.status(400).json({ error: 'Customer not found or not accessible by your account.' });
+      }
+
+      // 2. Calculate financial totals
+      const { subtotal, discountAmount, taxAmount, grandTotal } = calculateOrderFormTotal(
+        items,
+        additionalCharges,
+        taxRate,
+        { enabled: discountEnabled, type: discountType, value: discountValue }
+      );
+
+      // 3. Prepare data for Supabase insertion
+      const orderFormToInsert = {
+        customerId,
+        customerActualName: customer.name,
+        orderFormNumber: generatedOrderFormNumber, // Use the generated number
+        issueDate,
+        validUntilDate,
+        items: JSON.stringify(items),
+        additionalCharges: JSON.stringify(additionalCharges),
+        taxRate,
+        discountEnabled,
+        discountDescription: discountDescription || null,
+        discountType,
+        discountValue,
+        discountAmount,
+        msaContent,
+        msaCoverPageTemplateId: msaCoverPageTemplateId === '' ? null : msaCoverPageTemplateId,
+        termsAndConditions,
+        status,
+        paymentTerms,
+        customPaymentTerms: customPaymentTerms || null,
+        commitmentPeriod,
+        customCommitmentPeriod: customCommitmentPeriod || null,
+        paymentFrequency,
+        customPaymentFrequency: customPaymentFrequency || null,
+        serviceStartDate,
+        serviceEndDate,
+        subtotal,
+        taxAmount,
+        total: grandTotal,
+        currencyCode: customer.currency || 'USD',
+        user_id: userId
+      };
+
+      console.log("DEBUG: orderFormToInsert payload for Supabase:", orderFormToInsert);
+
+      // Insert into Supabase
+      const { data, error } = await supabase
+        .from('order_form')
+        .insert([orderFormToInsert])
+        .select()
+        .single();
+
+      if (error) {
+        console.error('Supabase insert error for new order form:', error.message);
+        // The unique constraint on orderFormNumber in your table will prevent duplicates
+        if (error.code === '23505') {
+          return res.status(409).json({ error: 'Generated order form number already exists. Please try again.', details: error.message });
         }
+        return res.status(500).json({ error: 'Failed to create order form in database.', details: error.message });
+      }
 
-        // --- Generate Next Order Form Number using RPC Function ---
-        const { data: nextNumber, error: rpcError } = await supabase.rpc('get_next_order_form_sequence', {
-            p_user_id: userId,
-            p_prefix: orderFormPrefix
-        });
-
-        if (rpcError) {
-            console.error('Error calling get_next_order_form_sequence RPC:', rpcError.message);
-            return res.status(500).json({ error: 'Failed to generate next order form number.', details: rpcError.message });
-        }
-
-        const newOrderFormNumberValue = nextNumber; // The RPC already returns the incremented value
-        const formattedNumber = String(newOrderFormNumberValue).padStart(3, '0'); // Pad with leading zeros
-        generatedOrderFormNumber = `${orderFormPrefix}${formattedNumber}`;
-
-        console.log(`Generated Order Form Number for user ${userId}: ${generatedOrderFormNumber}`);
-
-        // --- Rest of your original POST logic ---
-        // 1. Fetch customer details (name and currency) for the current user
-        const { data: customer, error: customerError } = await supabase
-            .from('customer')
-            .select('name, currency')
-            .eq('id', customerId)
-            .eq('user_id', userId)
-            .single();
-
-        if (customerError || !customer) {
-            console.error("Error fetching customer for order form:", customerError?.message || "Customer not found.");
-            return res.status(400).json({ error: 'Customer not found or not accessible by your account.' });
-        }
-
-        // 2. Calculate financial totals
-        const { subtotal, discountAmount, taxAmount, grandTotal } = calculateOrderFormTotal(
-            items,
-            additionalCharges,
-            taxRate,
-            { enabled: discountEnabled, type: discountType, value: discountValue }
-        );
-
-        // 3. Prepare data for Supabase insertion
-        const orderFormToInsert = {
-            customerId,
-            customerActualName: customer.name,
-            orderFormNumber: generatedOrderFormNumber, // Use the generated number
-            issueDate,
-            validUntilDate,
-            items: JSON.stringify(items),
-            additionalCharges: JSON.stringify(additionalCharges),
-            taxRate,
-            discountEnabled,
-            discountDescription: discountDescription || null,
-            discountType,
-            discountValue,
-            discountAmount,
-            msaContent,
-            msaCoverPageTemplateId: msaCoverPageTemplateId === '' ? null : msaCoverPageTemplateId,
-            termsAndConditions,
-            status,
-            paymentTerms,
-            customPaymentTerms: customPaymentTerms || null,
-            commitmentPeriod,
-            customCommitmentPeriod: customCommitmentPeriod || null,
-            paymentFrequency,
-            customPaymentFrequency: customPaymentFrequency || null,
-            serviceStartDate,
-            serviceEndDate,
-            subtotal,
-            taxAmount,
-            total: grandTotal,
-            currencyCode: customer.currency || 'USD',
-            user_id: userId
-        };
-
-        console.log("DEBUG: orderFormToInsert payload for Supabase:", orderFormToInsert);
-
-        // Insert into Supabase
-        const { data, error } = await supabase
-            .from('order_form')
-            .insert([orderFormToInsert])
-            .select()
-            .single();
-
-        if (error) {
-            console.error('Supabase insert error for new order form:', error.message);
-            // The unique constraint on orderFormNumber in your table will prevent duplicates
-            if (error.code === '23505') {
-                return res.status(409).json({ error: 'Generated order form number already exists. Please try again.', details: error.message });
-            }
-            return res.status(500).json({ error: 'Failed to create order form in database.', details: error.message });
-        }
-
-        console.log("DEBUG: New Order Form created successfully:", data);
-        return res.status(201).json(data);
+      console.log("DEBUG: New Order Form created successfully:", data);
+      return res.status(201).json(data);
     } catch (error) {
-        console.error('Unexpected error in POST /api/order-forms:', error.message, error.stack);
-        return res.status(500).json({ error: 'Internal server error.' });
+      console.error('Unexpected error in POST /api/order-forms:', error.message, error.stack);
+      return res.status(500).json({ error: 'Internal server error.' });
     }
   }));
- 
+
 
 
 
@@ -337,7 +332,7 @@ export const createOrderFormRouter = ({ supabase }) => {
       // Filter by order form ID AND user ID
       const { data: existingOrderForm, error: fetchError } = await supabase
         .from('order_form')
-       .select('*')
+        .select('*')
         .eq('id', orderFormId)
         .eq('user_id', userId) // IMPORTANT: Verify ownership
         .single();
@@ -466,8 +461,8 @@ export const createOrderFormRouter = ({ supabase }) => {
       if (error) {
         // If the error code indicates no row was found (e.g., if ID or user_id didn't match)
         if (error.code === 'PGRST116' || error.message.includes('0 rows')) {
-            console.error(`Order Form ${orderFormId} not found or not owned by user ${userId}:`, error.message);
-            return res.status(404).json({ error: 'Order Form not found or not accessible by this user for deletion.' });
+          console.error(`Order Form ${orderFormId} not found or not owned by user ${userId}:`, error.message);
+          return res.status(404).json({ error: 'Order Form not found or not accessible by this user for deletion.' });
         }
         console.error(`Error deleting order form ${orderFormId} for user ${userId}:`, error.message);
         return res.status(500).json({ error: 'Failed to delete order form.', details: error.message });
@@ -484,6 +479,63 @@ export const createOrderFormRouter = ({ supabase }) => {
       return res.status(500).json({ error: 'Internal server error.' });
     }
   }));
+  // --- NEW: API to send order form via email ---
+    router.post('/:id/send-email',
+        // Note: express.json({ limit: '50mb' }) is explicitly applied here because
+        // the main server.js applies express.json() before this router, but with a
+        // potentially smaller default limit. This ensures large PDF Base64 strings are parsed.
+        express.json({ limit: '50mb' }),
+        asyncHandler(async (req, res) => {
+            const userId = req.user?.id;
+            if (!userId) {
+                console.error('Authentication error: User ID not found in request for POST /api/order-forms/:id/send-email');
+                return res.status(401).json({ message: 'User not authenticated.' });
+            }
+
+            const orderFormId = req.params.id;
+            const { to, subject, body: htmlBody, pdfBufferBase64, senderName } = req.body;
+
+            // 1. Validate incoming data
+            if (!to || !subject || !pdfBufferBase64 || !orderFormId) {
+                return res.status(400).json({ success: false, message: 'Missing required email fields (to, subject, pdfBufferBase64) or Order Form ID.' });
+            }
+
+            try {
+                // 2. Verify ownership of the order form (security check)
+                const { data: orderForm, error: orderFormError } = await supabase
+                    .from('order_form')
+                    .select('id, orderFormNumber') // Only need ID and number for verification/attachment name
+                    .eq('id', orderFormId)
+                    .eq('user_id', userId)
+                    .single();
+
+                if (orderFormError || !orderForm) {
+                    console.error(`Order Form ${orderFormId} not found or not owned by user ${userId} for email sending:`, orderFormError?.message);
+                    return res.status(404).json({ error: 'Order Form not found or not accessible by this user.' });
+                }
+
+                // 3. Send the email using the imported service function
+                await sendOrderFormEmail({
+                    to,
+                    subject,
+                    htmlBody,
+                    pdfBufferBase64,
+                    orderFormNumber: orderForm.orderFormNumber, // Use the actual order form number from DB
+                    senderName: senderName || process.env.SENDER_NAME || 'InvoiceCraft'
+                });
+
+                res.status(200).json({ success: true, message: 'Order Form email sent successfully!' });
+
+            } catch (error) {
+                console.error('Error sending order form email:', error.message, error.stack);
+                // Check if the error is related to email credentials (e.g., from emailService.js verification)
+                if (error.message.includes('Authentication failed') || error.message.includes('Invalid login')) {
+                     return res.status(500).json({ success: false, message: 'Email service authentication failed. Please check server SMTP credentials.' });
+                }
+                return res.status(500).json({ success: false, message: 'Failed to send order form email.', details: error.message });
+            }
+        })
+    );
 
   return router;
 };

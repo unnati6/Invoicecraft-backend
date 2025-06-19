@@ -1,108 +1,147 @@
 import express from 'express';
 import asyncHandler from 'express-async-handler';
-import { calculateOrderFormTotal } from '../utils/calculations.js'; // Ensure .js extension for local imports
-
-// No need for declare module or interface RouterOptions in plain JavaScript.
-// The 'req.user' property is assumed to be added by the 'authenticateToken' middleware.
+// Make sure this path is correct for your calculations utility
+import { calculateOrderFormTotal } from '../utils/calculations.js';
+// Assuming you'll have a specific sendInvoiceEmail function
+import { sendInvoiceEmail } from '../utils/sendEmail.js'; // You'll need to create/adapt this
 
 export const createInvoiceRouter = ({ supabase }) => {
   const router = express.Router();
 
+  // Helper function for safe JSONB parsing (from orderFormRoutes)
+  const safeParseJsonb = (jsonbInput) => {
+    if (jsonbInput === null || jsonbInput === undefined) {
+      return [];
+    }
+    if (typeof jsonbInput === 'string') {
+      try {
+        const parsed = JSON.parse(jsonbInput);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (e) {
+        console.error("Failed to parse JSONB string:", e);
+        return [];
+      }
+    }
+    return Array.isArray(jsonbInput) ? jsonbInput : [];
+  };
+
   // GET all invoices for the authenticated user
   router.get('/', asyncHandler(async (req, res) => {
-    // Ensure the user is authenticated; req.user is set by the middleware
     const userId = req.user?.id;
     if (!userId) {
-      console.error('Authentication error: User ID not found in request for GET /api/invoices');
+      console.error('Authentication error: User ID not found for GET /api/invoices');
       return res.status(401).json({ message: 'User not authenticated.' });
     }
 
-    console.log('[BACKEND REQUEST] GET /api/invoices for user:', userId);
-    console.log('[BACKEND REQUEST] Headers:', req.headers);
-
     try {
-      // Filter invoices by the authenticated user's ID
-      const { data, error } = await supabase.from('invoice')
+      const { data, error } = await supabase
+        .from('invoice')
         .select('*')
-        .eq('user_id', userId); // IMPORTANT: Filter by user_id
+        .eq('user_id', userId);
 
       if (error) {
-        console.error('⛔️ [Backend ERROR] Error fetching invoices from Supabase:', error.message);
-        return res.status(500).json({ error: 'Failed to fetch invoices from database', details: error.message });
+        console.error('Error fetching invoices:', error.message);
+        return res.status(500).json({ error: 'Failed to fetch invoices.', details: error.message });
+      }
+      return res.json(data);
+    } catch (error) {
+      console.error('Unexpected error in GET /api/invoices:', error.message, error.stack);
+      return res.status(500).json({ error: 'Internal server error.' });
+    }
+  }));
+
+  // GET the next available invoice number for the authenticated user
+  router.get('/next-number', asyncHandler(async (req, res) => {
+    const userId = req.user?.id;
+    if (!userId) {
+      console.error('Authentication error: User ID not found for GET /api/invoices/next-number');
+      return res.status(401).json({ message: 'User not authenticated.' });
+    }
+
+    let invoicePrefix = 'INV-'; // Default prefix for invoices
+
+    try {
+      // --- Get Prefix from Branding Settings ---
+      const { data: brandingSettings, error: brandingError } = await supabase
+        .from('branding_settings')
+        .select('invoicePrefix') // Make sure this column exists in branding_settings
+        .eq('user_id', userId)
+        .single();
+
+      if (brandingError || !brandingSettings || !brandingSettings.invoicePrefix) {
+        console.warn(`Branding settings or custom invoice prefix not found for user ${userId}. Using default prefix 'INV-'. Error: ${brandingError?.message}`);
+      } else {
+        invoicePrefix = brandingSettings.invoicePrefix;
       }
 
-      if (!data || data.length === 0) {
-        console.log('✅ [Backend SUCCESS] No invoices found for user. Returning empty array.');
-        return res.status(200).json([]);
+      // --- Call get_next_invoice_sequence RPC Function ---
+      const { data: nextNumber, error: rpcError } = await supabase.rpc('get_next_invoice_sequence', {
+        p_user_id: userId,
+        p_prefix: invoicePrefix
+      });
+
+      if (rpcError) {
+        console.error('Error calling get_next_invoice_sequence RPC:', rpcError.message);
+        return res.status(500).json({ error: 'Failed to generate next invoice number.', details: rpcError.message });
       }
 
-      console.log(`✅ [Backend SUCCESS] Successfully fetched ${data.length} invoices for user ${userId}.`);
-      return res.status(200).json(data);
-    } catch (unexpectedError) { // Removed type annotation
-      console.error('🔥 [Backend FATAL ERROR] Unexpected error in GET /api/invoices route:', unexpectedError.message);
-      return res.status(500).json({ error: 'Internal server error occurred while fetching invoices.' });
+      const formattedNumber = String(nextNumber).padStart(3, '0');
+      const generatedInvoiceNumber = `${invoicePrefix}${formattedNumber}`;
+
+      return res.status(200).json({ nextInvoiceNumber: generatedInvoiceNumber });
+
+    } catch (error) {
+      console.error('Unexpected error in GET /api/invoices/next-number:', error.message, error.stack);
+      return res.status(500).json({ error: 'Internal server error.' });
     }
   }));
 
   // GET invoice by ID for the authenticated user
   router.get('/:id', asyncHandler(async (req, res) => {
-    // Ensure the user is authenticated
     const userId = req.user?.id;
     if (!userId) {
-      console.error('Authentication error: User ID not found in request for GET /api/invoices/:id');
+      console.error('Authentication error: User ID not found for GET /api/invoices/:id');
       return res.status(401).json({ message: 'User not authenticated.' });
     }
 
     const invoiceId = req.params.id;
-    console.log(`[Backend] Attempting to find invoice with ID: ${invoiceId} for user: ${userId}`);
     try {
-      // Filter by invoice ID AND user ID
       const { data, error } = await supabase
         .from('invoice')
         .select('*')
         .eq('id', invoiceId)
-        .eq('user_id', userId) // IMPORTANT: Filter by user_id
+        .eq('user_id', userId)
         .single();
 
-      console.log(`[Backend] Database query result for ID ${invoiceId} (user ${userId}):`, data);
       if (error) {
         if (error.code === 'PGRST116' || error.message.includes('0 rows')) {
-          res.status(404).json({ error: 'Invoice not found or not accessible by this user.' });
-          return;
+          return res.status(404).json({ error: 'Invoice not found or not accessible by this user.' });
         } else {
           console.error(`Error fetching invoice ${invoiceId} for user ${userId}:`, error.message);
-          res.status(500);
-          throw new Error(error.message);
+          return res.status(500).json({ error: 'Failed to fetch invoice.', details: error.message });
         }
       } else {
-        res.json(data);
-        return;
+        return res.json(data);
       }
-    } catch (error) { // Removed type annotation
-      console.error('Unexpected error in GET /api/invoices/:id:', error.message);
-      res.status(500);
-      throw new Error('Internal server error.');
+    } catch (error) {
+      console.error('Unexpected error in GET /api/invoices/:id:', error.message, error.stack);
+      return res.status(500).json({ error: 'Internal server error.' });
     }
   }));
 
   // POST a new invoice for the authenticated user
   router.post('/', asyncHandler(async (req, res) => {
-    // Ensure the user is authenticated
     const userId = req.user?.id;
     if (!userId) {
-      console.error('Authentication error: User ID not found in request for POST /api/invoices');
+      console.error('Authentication error: User ID not found for POST /api/invoices');
       return res.status(401).json({ message: 'User not authenticated.' });
     }
 
-    console.log('[BACKEND DEBUG] Received POST /api/invoices body:', req.body);
-    console.log('[BACKEND DEBUG] Type of items:', typeof req.body.items, 'Value:', req.body.items);
-    console.log('[BACKEND DEBUG] Type of additionalCharges:', typeof req.body.additionalCharges, 'Value:', req.body.additionalCharges);
-
     const {
       customerId,
-      invoiceNumber,
+      // invoiceNumber - We will generate this on the backend
       issueDate,
-      dueDate,
+      validUntilDate, // Renamed from dueDate
       items,
       additionalCharges,
       taxRate,
@@ -111,7 +150,8 @@ export const createInvoiceRouter = ({ supabase }) => {
       discountType,
       discountValue,
       msaContent,
-      msacoverpagetemplateid,
+      linkedMsaTemplateId, // Corrected casing
+      msaCoverPageTemplateId, // Corrected casing
       termsAndConditions,
       status,
       paymentTerms,
@@ -124,13 +164,46 @@ export const createInvoiceRouter = ({ supabase }) => {
       serviceEndDate
     } = req.body;
 
+    let generatedInvoiceNumber;
+    let invoicePrefix = 'INV-'; // Default prefix
+
     try {
-      // 1. Fetch customer details (name and currency) for the current user
+      // --- Get Prefix from Branding Settings ---
+      const { data: brandingSettings, error: brandingError } = await supabase
+        .from('branding_settings')
+        .select('invoicePrefix')
+        .eq('user_id', userId)
+        .single();
+
+      if (brandingError || !brandingSettings) {
+        console.warn(`Branding settings not found for user ${userId}. Using default invoice prefix 'INV-'. Error: ${brandingError?.message}`);
+      } else {
+        invoicePrefix = brandingSettings.invoicePrefix || 'INV-';
+      }
+
+      // --- Generate Next Invoice Number using RPC Function ---
+      const { data: nextNumber, error: rpcError } = await supabase.rpc('get_next_invoice_sequence', {
+        p_user_id: userId,
+        p_prefix: invoicePrefix
+      });
+
+      if (rpcError) {
+        console.error('Error calling get_next_invoice_sequence RPC:', rpcError.message);
+        return res.status(500).json({ error: 'Failed to generate next invoice number.', details: rpcError.message });
+      }
+
+      const newInvoiceNumberValue = nextNumber;
+      const formattedNumber = String(newInvoiceNumberValue).padStart(3, '0');
+      generatedInvoiceNumber = `${invoicePrefix}${formattedNumber}`;
+
+      console.log(`Generated Invoice Number for user ${userId}: ${generatedInvoiceNumber}`);
+
+      // 1. Fetch customer details (name and currency)
       const { data: customer, error: customerError } = await supabase
         .from('customer')
         .select('name, currency')
         .eq('id', customerId)
-        .eq('user_id', userId) // IMPORTANT: Ensure customer belongs to this user
+        .eq('user_id', userId)
         .single();
 
       if (customerError || !customer) {
@@ -138,8 +211,8 @@ export const createInvoiceRouter = ({ supabase }) => {
         return res.status(400).json({ error: 'Customer not found or not accessible by your account.' });
       }
 
-      // 2. Calculate financial totals
-      const { subtotal, discountAmount, taxAmount, grandTotal } = calculateOrderFormTotal(
+      // 2. Calculate financial totals (using the same calculation logic for consistency)
+      const { subtotal, discountAmount, taxAmount, grandTotal } = calculateOrderFormTotal( // Reusing calculateOrderFormTotal
         items,
         additionalCharges,
         taxRate,
@@ -150,19 +223,20 @@ export const createInvoiceRouter = ({ supabase }) => {
       const invoiceToInsert = {
         customerId,
         customerActualName: customer.name,
-        invoiceNumber,
+        invoiceNumber: generatedInvoiceNumber,
         issueDate,
-        dueDate,
-        items: items || [],
-        additionalCharges: additionalCharges || [],
+        validUntilDate, // Renamed from dueDate
+        items: JSON.stringify(items),
+        additionalCharges: JSON.stringify(additionalCharges),
         taxRate,
         discountEnabled,
         discountDescription: discountDescription || null,
         discountType,
         discountValue,
-        discountAmount, // Add the calculated 'discountAmount' here
+        discountAmount, // Calculated
         msaContent,
-        msacoverpagetemplateid: msacoverpagetemplateid === '' ? null : msacoverpagetemplateid,
+        linkedMsaTemplateId: linkedMsaTemplateId === '' ? null : linkedMsaTemplateId, // Corrected casing, handle empty string
+        msaCoverPageTemplateId: msaCoverPageTemplateId === '' ? null : msaCoverPageTemplateId, // Corrected casing, handle empty string
         termsAndConditions,
         status,
         paymentTerms,
@@ -174,10 +248,10 @@ export const createInvoiceRouter = ({ supabase }) => {
         serviceStartDate,
         serviceEndDate,
         subtotal,
-        taxAmount,
-        total: grandTotal,
+        taxAmount, // Calculated
+        total: grandTotal, // Calculated
         currencyCode: customer.currency || 'USD',
-        user_id: userId // IMPORTANT: Associate invoice with the authenticated user
+        user_id: userId
       };
 
       console.log("DEBUG: invoiceToInsert payload for Supabase:", invoiceToInsert);
@@ -190,56 +264,35 @@ export const createInvoiceRouter = ({ supabase }) => {
         .single();
 
       if (error) {
-        console.error('Supabase insert error for new invoice form:', error.message);
-        if (error.code === '23505') {
-          return res.status(409).json({ error: 'Duplicate invoice form number or other unique constraint violation.', details: error.message });
+        console.error('Supabase insert error for new invoice:', error.message);
+        if (error.code === '23505') { // Unique constraint violation
+          return res.status(409).json({ error: 'Generated invoice number already exists. Please try again.', details: error.message });
         }
         return res.status(500).json({ error: 'Failed to create invoice in database.', details: error.message });
       }
 
-      console.log("DEBUG: New invoice Form created successfully:", data);
+      console.log("DEBUG: New Invoice created successfully:", data);
       return res.status(201).json(data);
-    } catch (error) { // Removed type annotation
-      console.error('Unexpected error in POST /api/invoice:', error.message, error.stack);
+    } catch (error) {
+      console.error('Unexpected error in POST /api/invoices:', error.message, error.stack);
       return res.status(500).json({ error: 'Internal server error.' });
     }
   }));
 
-  // Helper function for safe JSONB parsing
-  const safeParseJsonb = (jsonbInput) => { // Removed type annotation
-    if (jsonbInput === null || jsonbInput === undefined) {
-      return []; // Explicitly return empty array for null or undefined
-    }
-    if (typeof jsonbInput === 'string') {
-      try {
-        const parsed = JSON.parse(jsonbInput);
-        // Ensure that if the parsed result is not an array, we still return an array (e.g., if it parsed to a scalar or object)
-        return Array.isArray(parsed) ? parsed : [];
-      } catch (e) {
-        console.error("Failed to parse JSONB string:", e);
-        return []; // Return an empty array on parse error
-      }
-    }
-    // If it's already an array or object, return it as is, but ensure it's an array
-    return Array.isArray(jsonbInput) ? jsonbInput : [];
-  };
-
   // PUT (Update) invoice by ID for the authenticated user
   router.put('/:id', asyncHandler(async (req, res) => {
-    // Ensure the user is authenticated
     const userId = req.user?.id;
     if (!userId) {
-      console.error('Authentication error: User ID not found in request for PUT /api/invoices/:id');
+      console.error('Authentication error: User ID not found for PUT /api/invoices/:id');
       return res.status(401).json({ message: 'User not authenticated.' });
     }
 
     const invoiceId = req.params.id;
-    // Destructure all fields that could potentially be updated
     const {
       customerId,
-      invoiceNumber,
+      invoiceNumber, // Allow updating number if needed, but usually generated
       issueDate,
-      dueDate,
+      validUntilDate, // Renamed from dueDate
       items,
       additionalCharges,
       taxRate,
@@ -248,7 +301,8 @@ export const createInvoiceRouter = ({ supabase }) => {
       discountType,
       discountValue,
       msaContent,
-      msacoverpagetemplateid,
+      linkedMsaTemplateId, // Corrected casing
+      msaCoverPageTemplateId, // Corrected casing
       termsAndConditions,
       status,
       paymentTerms,
@@ -259,28 +313,15 @@ export const createInvoiceRouter = ({ supabase }) => {
       customPaymentFrequency,
       serviceStartDate,
       serviceEndDate,
-      // Exclude customerName and currencyCode as they are derived/handled by backend
-      customerName, // Removed as it's not used in update and might be passed from client
-      currencyCode, // Removed as it's not used in update and might be passed from client
-      ...restOfBody // Capture any other fields if necessary
     } = req.body;
 
     try {
       // Fetch existing invoice to get current values for recalculations and fallbacks
-      // Filter by invoice ID AND user ID
       const { data: existingInvoice, error: fetchError } = await supabase
         .from('invoice')
-        .select(`
-          customerId, items, additionalCharges, taxRate,
-          discountEnabled, discountType, discountValue, discountDescription,
-          paymentTerms, customPaymentTerms, commitmentPeriod, customCommitmentPeriod, paymentFrequency, customPaymentFrequency,
-          msaContent, msacoverpagetemplateid, termsAndConditions, status,
-          invoiceNumber, issueDate, dueDate, serviceStartDate, serviceEndDate,
-          customerActualName, currencyCode, subtotal, taxAmount, discountAmount, total,
-          user_id // Ensure user_id is selected to verify ownership
-        `)
+        .select('*')
         .eq('id', invoiceId)
-        .eq('user_id', userId) // IMPORTANT: Verify ownership
+        .eq('user_id', userId)
         .single();
 
       if (fetchError || !existingInvoice) {
@@ -288,7 +329,6 @@ export const createInvoiceRouter = ({ supabase }) => {
         return res.status(404).json({ error: 'Invoice not found or not accessible by this user.' });
       }
 
-      // Determine customerId to use (from updateData or existing form)
       const currentCustomerId = customerId || existingInvoice.customerId;
 
       // Ensure the selected customer belongs to the same user
@@ -296,7 +336,7 @@ export const createInvoiceRouter = ({ supabase }) => {
         .from('customer')
         .select('name, currency')
         .eq('id', currentCustomerId)
-        .eq('user_id', userId) // IMPORTANT: Ensure customer belongs to this user
+        .eq('user_id', userId)
         .single();
 
       if (customerError || !customer) {
@@ -308,50 +348,38 @@ export const createInvoiceRouter = ({ supabase }) => {
       const parsedExistingItems = safeParseJsonb(existingInvoice.items);
       const parsedExistingAdditionalCharges = safeParseJsonb(existingInvoice.additionalCharges);
 
-      // Use incoming items/additionalCharges if provided, else use parsed existing ones
-      const itemsForCalculation = items !== undefined ? items : parsedExistingItems;
-      const additionalChargesForCalculation = additionalCharges !== undefined ? additionalCharges : parsedExistingAdditionalCharges;
-
-
-      // Recalculate totals, ensuring numeric types for taxRate and discountValue
-      const { subtotal, discountAmount, taxAmount, grandTotal } = calculateOrderFormTotal(
-        itemsForCalculation,
-        additionalChargesForCalculation,
-        parseFloat(taxRate ?? existingInvoice.taxRate) || 0, // Ensure numeric, fallback to existing or 0
+      // Recalculate totals for update
+      const { subtotal, discountAmount, taxAmount, grandTotal } = calculateOrderFormTotal( // Reusing calculateOrderFormTotal
+        items !== undefined ? items : parsedExistingItems,
+        additionalCharges !== undefined ? additionalCharges : parsedExistingAdditionalCharges,
+        parseFloat(taxRate ?? existingInvoice.taxRate) || 0,
         {
-          enabled: discountEnabled ?? existingInvoice.discountEnabled, // Boolean, fallback to existing
-          type: discountType || existingInvoice.discountType || null, // String, fallback to existing or null
-          value: parseFloat(discountValue ?? existingInvoice.discountValue) || 0 // Numeric, fallback to existing or 0
+          enabled: discountEnabled ?? existingInvoice.discountEnabled,
+          type: discountType || existingInvoice.discountType || null,
+          value: parseFloat(discountValue ?? existingInvoice.discountValue) || 0
         }
       );
 
-      // Prepare the object to update in the database
       const invoiceToUpdate = {
         customerId: currentCustomerId,
         customerActualName: customer.name,
         currencyCode: customer.currency || 'USD',
 
-        // Fields from req.body, with fallback to existing data if not provided
         invoiceNumber: invoiceNumber ?? existingInvoice.invoiceNumber,
         issueDate: issueDate ?? existingInvoice.issueDate,
-        dueDate: dueDate ?? existingInvoice.dueDate,
-
-        // Stringify items and additionalCharges for DB storage
+        validUntilDate: validUntilDate ?? existingInvoice.validUntilDate, // Renamed from dueDate
         items: items !== undefined ? JSON.stringify(items) : JSON.stringify(parsedExistingItems),
         additionalCharges: additionalCharges !== undefined ? JSON.stringify(additionalCharges) : JSON.stringify(parsedExistingAdditionalCharges),
-
-        taxRate: parseFloat(taxRate ?? existingInvoice.taxRate) || 0,
+        taxRate: taxRate ?? existingInvoice.taxRate,
         discountEnabled: discountEnabled ?? existingInvoice.discountEnabled,
         discountDescription: discountDescription || existingInvoice.discountDescription || null,
         discountType: discountType || existingInvoice.discountType || null,
-        discountValue: parseFloat(discountValue ?? existingInvoice.discountValue) || 0,
+        discountValue: discountValue ?? existingInvoice.discountValue,
         discountAmount: discountAmount, // Calculated value
 
         msaContent: msaContent || existingInvoice.msaContent || null,
-        // Handle msacoverpagetemplateid: if incoming is '', set to null; otherwise use incoming or existing
-        msacoverpagetemplateid: (msacoverpagetemplateid === '' || msacoverpagetemplateid === undefined)
-          ? (existingInvoice.msacoverpagetemplateid || null)
-          : msacoverpagetemplateid,
+        linkedMsaTemplateId: (linkedMsaTemplateId === '' || linkedMsaTemplateId === undefined) ? (existingInvoice.linkedMsaTemplateId || null) : linkedMsaTemplateId, // Corrected casing, handle empty string
+        msaCoverPageTemplateId: (msaCoverPageTemplateId === '' || msaCoverPageTemplateId === undefined) ? (existingInvoice.msaCoverPageTemplateId || null) : msaCoverPageTemplateId, // Corrected casing, handle empty string
         termsAndConditions: termsAndConditions || existingInvoice.termsAndConditions || null,
         status: status || existingInvoice.status,
 
@@ -365,11 +393,10 @@ export const createInvoiceRouter = ({ supabase }) => {
         serviceStartDate: serviceStartDate ?? existingInvoice.serviceStartDate,
         serviceEndDate: serviceEndDate ?? existingInvoice.serviceEndDate,
 
-        // Calculated totals
         subtotal: subtotal,
         taxAmount: taxAmount,
         total: grandTotal,
-        user_id: userId // IMPORTANT: Ensure user_id is included in the update payload for security
+        user_id: userId
       };
 
       console.log("DEBUG: invoiceToUpdate payload for Supabase:", invoiceToUpdate);
@@ -378,7 +405,7 @@ export const createInvoiceRouter = ({ supabase }) => {
         .from('invoice')
         .update(invoiceToUpdate)
         .eq('id', invoiceId)
-        .eq('user_id', userId) // IMPORTANT: Ensure update is for invoice owned by this user
+        .eq('user_id', userId)
         .select()
         .single();
 
@@ -389,12 +416,12 @@ export const createInvoiceRouter = ({ supabase }) => {
         }
         return res.status(500).json({ error: 'Failed to update invoice in database.', details: error.message });
       }
-      if (!data) { // If data is null, it means no row was found or updated (e.g., if ID or user_id didn't match)
+      if (!data) {
         return res.status(404).json({ error: 'Invoice not found or no changes made, or not accessible by this user.' });
       }
       console.log("DEBUG: Invoice updated successfully:", data);
       return res.json(data);
-    } catch (error) { // Removed type annotation
+    } catch (error) {
       console.error('Unexpected error in PUT /api/invoices/:id:', error.message, error.stack);
       return res.status(500).json({ error: 'Internal server error.' });
     }
@@ -402,42 +429,97 @@ export const createInvoiceRouter = ({ supabase }) => {
 
   // DELETE invoice by ID for the authenticated user
   router.delete('/:id', asyncHandler(async (req, res) => {
-    // Ensure the user is authenticated
     const userId = req.user?.id;
     if (!userId) {
-      console.error('Authentication error: User ID not found in request for DELETE /api/invoices/:id');
+      console.error('Authentication error: User ID not found for DELETE /api/invoices/:id');
       return res.status(401).json({ message: 'User not authenticated.' });
     }
 
     const invoiceId = req.params.id;
-    console.log(`[Backend] Attempting to delete invoice with ID: ${invoiceId} for user: ${userId}`);
-
     try {
-      // Delete only if the invoice belongs to the authenticated user
-      const { error } = await supabase
+      const { error, count } = await supabase
         .from('invoice')
         .delete()
         .eq('id', invoiceId)
-        .eq('user_id', userId); // IMPORTANT: Delete only if owned by this user
+        .eq('user_id', userId);
 
       if (error) {
-        // If the error code indicates no row was found (e.g., if ID or user_id didn't match)
         if (error.code === 'PGRST116' || error.message.includes('0 rows')) {
-            console.error(`Invoice ${invoiceId} not found or not owned by user ${userId}:`, error.message);
-            return res.status(404).json({ error: 'Invoice not found or not accessible by this user for deletion.' });
+          console.error(`Invoice ${invoiceId} not found or not owned by user ${userId}:`, error.message);
+          return res.status(404).json({ error: 'Invoice not found or not accessible by this user for deletion.' });
         }
         console.error(`Error deleting invoice ${invoiceId} for user ${userId}:`, error.message);
-        res.status(500);
-        throw new Error(error.message);
+        return res.status(500).json({ error: 'Failed to delete invoice.', details: error.message });
       }
-      console.log(`Invoice ${invoiceId} for user ${userId} successfully deleted.`);
-      res.status(204).send();
-    } catch (error) { // Removed type annotation
-      console.error('Unexpected error in DELETE /api/invoices/:id:', error.message);
-      res.status(500);
-      throw new Error('Internal server error.');
+
+      if (count === 0) {
+        return res.status(404).json({ error: 'Invoice not found or already deleted.' });
+      }
+
+      return res.status(204).send();
+    } catch (error) {
+      console.error('Unexpected error in DELETE /api/invoices/:id:', error.message, error.stack);
+      return res.status(500).json({ error: 'Internal server error.' });
     }
   }));
+
+  // NEW: API to send invoice via email
+  router.post('/:id/send-email',
+    // Apply express.json with a larger limit here if necessary,
+    // assuming main app.js also has a general express.json middleware.
+    express.json({ limit: '50mb' }),
+    asyncHandler(async (req, res) => {
+      const userId = req.user?.id;
+      if (!userId) {
+        console.error('Authentication error: User ID not found for POST /api/invoices/:id/send-email');
+        return res.status(401).json({ message: 'User not authenticated.' });
+      }
+
+      const invoiceId = req.params.id;
+      const { to, subject, body: htmlBody, pdfBufferBase64, senderName } = req.body;
+
+      // 1. Validate incoming data
+      if (!to || !subject || !pdfBufferBase64 || !invoiceId) {
+        return res.status(400).json({ success: false, message: 'Missing required email fields (to, subject, pdfBufferBase64) or Invoice ID.' });
+      }
+
+      try {
+        // 2. Verify ownership of the invoice
+        const { data: invoice, error: invoiceError } = await supabase
+          .from('invoice')
+          .select('id, invoiceNumber') // Only need ID and number for verification/attachment name
+          .eq('id', invoiceId)
+          .eq('user_id', userId)
+          .single();
+
+        if (invoiceError || !invoice) {
+          console.error(`Invoice ${invoiceId} not found or not owned by user ${userId} for email sending:`, invoiceError?.message);
+          return res.status(404).json({ error: 'Invoice not found or not accessible by this user.' });
+        }
+
+        // 3. Send the email using the imported service function
+        // You need to adapt sendEmail.js to have a sendInvoiceEmail function.
+        await sendInvoiceEmail({
+          to,
+          subject,
+          htmlBody,
+          pdfBufferBase64,
+          invoiceNumber: invoice.invoiceNumber, // Use the actual invoice number from DB
+          senderName: senderName || process.env.SENDER_NAME || 'InvoiceCraft'
+        });
+
+        res.status(200).json({ success: true, message: 'Invoice email sent successfully!' });
+
+      } catch (error) {
+        console.error('Error sending invoice email:', error.message, error.stack);
+        if (error.message.includes('Authentication failed') || error.message.includes('Invalid login')) {
+          return res.status(500).json({ success: false, message: 'Email service authentication failed. Please check server SMTP credentials.' });
+        }
+        return res.status(500).json({ success: false, message: 'Failed to send invoice email.', details: error.message });
+      }
+    })
+  );
+
 
   return router;
 };
