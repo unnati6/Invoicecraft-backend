@@ -4,6 +4,7 @@ import asyncHandler from 'express-async-handler';
 import { calculateOrderFormTotal } from '../utils/calculations.js';
 // Assuming you'll have a specific sendInvoiceEmail function
 import { sendInvoiceEmail } from '../utils/sendEmail.js'; // You'll need to create/adapt this
+import dotenv from 'dotenv';
 
 export const createInvoiceRouter = ({ supabase }) => {
   const router = express.Router();
@@ -476,12 +477,21 @@ export const createInvoiceRouter = ({ supabase }) => {
       }
 
       const invoiceId = req.params.id;
-      const { to, subject, body: htmlBody, pdfBufferBase64, senderName } = req.body;
+      const { to, cc,bcc,subject, body: htmlBody, pdfBufferBase64, senderName,senderEmail } = req.body;
 
-      // 1. Validate incoming data
-      if (!to || !subject || !pdfBufferBase64 || !invoiceId) {
-        return res.status(400).json({ success: false, message: 'Missing required email fields (to, subject, pdfBufferBase64) or Invoice ID.' });
-      }
+     if (!to || !subject || !pdfBufferBase64 || !invoiceId) {
+  return res.status(400).json({
+    success: false,
+    message: 'Missing required fields: to, subject, pdfBufferBase64, or invoiceId.'
+  });
+}
+
+if (!process.env.SMTP_USER) {
+  return res.status(500).json({
+    success: false,
+    message: 'SMTP_USER is not configured on the server. Email cannot be sent.'
+  });
+}
 
       try {
         // 2. Verify ownership of the invoice
@@ -508,7 +518,7 @@ export const createInvoiceRouter = ({ supabase }) => {
           pdfBufferBase64,
           invoiceNumber: invoice.invoiceNumber, // Use the actual invoice number from DB
           senderName: senderName || process.env.SENDER_NAME || 'InvoiceCraft',
-          senderEmail
+          senderEmail:process.env.SMTP_USER 
         });
 
         res.status(200).json({ success: true, message: 'Invoice email sent successfully!' });
