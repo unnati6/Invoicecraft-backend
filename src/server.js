@@ -30,10 +30,10 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 app.use(cors({
-  origin: ['http://localhost:3000', 'http://localhost:9002', 'https://invoicecraft-murex.vercel.app'],
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true
+origin: ['http://localhost:3000', 'http://localhost:9002', 'https://invoicecraft-murex.vercel.app'],
+methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+allowedHeaders: ['Content-Type', 'Authorization'],
+credentials: true
 }));
 
 let supabase;
@@ -44,14 +44,14 @@ const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceRoleKey) {
-  console.error('Missing Supabase URL, Anon Key, or Service Role Key in environment variables. Please check your .env file.');
-  process.exit(1);
+console.error('Missing Supabase URL, Anon Key, or Service Role Key in environment variables. Please check your .env file.');
+process.exit(1);
 } else {
-  supabase = createClient(supabaseUrl, supabaseAnonKey, {
-    auth: {
-      autoRefreshToken: true,
-      persistSession: true,
-    }
+supabase = createClient(supabaseUrl, supabaseAnonKey, {
+auth: {
+     autoRefreshToken: true,
+persistSession: true,
+ }
   });
   console.log('Supabase (Anon) client initialized.');
 
@@ -126,16 +126,16 @@ app.use('/api/Purchaseorder', authenticateToken({ supabase }), express.json(), c
 
 //Error Handling Middleware
 app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(res.statusCode || 500).json({
-    error: err.message,
-    stack: process.env.NODE_ENV === 'production' ? '🥞' : err.stack
-  });
+  console.error(err.stack);
+  res.status(res.statusCode || 500).json({
+error: err.message,
+stack: process.env.NODE_ENV === 'production' ? '🥞' : err.stack
+ });
 });
 
 
 //Start the server
 app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-  console.log(`Access at http://localhost:${PORT}`);
+console.log(`Server is running on port ${PORT}`);
+console.log(`Access at http://localhost:${PORT}`);
 });

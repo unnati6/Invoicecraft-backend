@@ -501,11 +501,14 @@ export const createInvoiceRouter = ({ supabase }) => {
         // You need to adapt sendEmail.js to have a sendInvoiceEmail function.
         await sendInvoiceEmail({
           to,
+          cc, // CC पास करें
+            bcc, // BCC पास करें
           subject,
           htmlBody,
           pdfBufferBase64,
           invoiceNumber: invoice.invoiceNumber, // Use the actual invoice number from DB
-          senderName: senderName || process.env.SENDER_NAME || 'InvoiceCraft'
+          senderName: senderName || process.env.SENDER_NAME || 'InvoiceCraft',
+          senderEmail
         });
 
         res.status(200).json({ success: true, message: 'Invoice email sent successfully!' });

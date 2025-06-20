@@ -480,62 +480,62 @@ export const createOrderFormRouter = ({ supabase }) => {
     }
   }));
   // --- NEW: API to send order form via email ---
-    router.post('/:id/send-email',
-        // Note: express.json({ limit: '50mb' }) is explicitly applied here because
-        // the main server.js applies express.json() before this router, but with a
-        // potentially smaller default limit. This ensures large PDF Base64 strings are parsed.
-        express.json({ limit: '50mb' }),
-        asyncHandler(async (req, res) => {
-            const userId = req.user?.id;
-            if (!userId) {
-                console.error('Authentication error: User ID not found in request for POST /api/order-forms/:id/send-email');
-                return res.status(401).json({ message: 'User not authenticated.' });
-            }
+  router.post('/:id/send-email',
+    express.json({ limit: '50mb' }),
+    asyncHandler(async (req, res) => {
+      const userId = req.user?.id;
+      if (!userId) {
+        console.error('Authentication error: User ID not found in request for POST /api/order-forms/:id/send-email');
+        return res.status(401).json({ message: 'User not authenticated.' });
+      }
 
-            const orderFormId = req.params.id;
-            const { to, subject, body: htmlBody, pdfBufferBase64, senderName } = req.body;
+      const orderFormId = req.params.id;
+      // --- यहाँ बदलाव करें: cc और bcc को req.body से डीस्ट्रक्चर करें ---
+      const { to, cc, bcc, subject, body: htmlBody, pdfBufferBase64, senderName, senderEmail } = req.body;
 
-            // 1. Validate incoming data
-            if (!to || !subject || !pdfBufferBase64 || !orderFormId) {
-                return res.status(400).json({ success: false, message: 'Missing required email fields (to, subject, pdfBufferBase64) or Order Form ID.' });
-            }
+      // 1. Validate incoming data
+      if (!to || !subject || !pdfBufferBase64 || !orderFormId) {
+        return res.status(400).json({ success: false, message: 'Missing required email fields (to, subject, pdfBufferBase64) or Order Form ID.' });
+      }
 
-            try {
-                // 2. Verify ownership of the order form (security check)
-                const { data: orderForm, error: orderFormError } = await supabase
-                    .from('order_form')
-                    .select('id, orderFormNumber') // Only need ID and number for verification/attachment name
-                    .eq('id', orderFormId)
-                    .eq('user_id', userId)
-                    .single();
+      try {
+        // 2. Verify ownership of the order form (security check)
+        const { data: orderForm, error: orderFormError } = await supabase
+          .from('order_form')
+          .select('id, orderFormNumber') // Only need ID and number for verification/attachment name
+          .eq('id', orderFormId)
+          .eq('user_id', userId)
+          .single();
 
-                if (orderFormError || !orderForm) {
-                    console.error(`Order Form ${orderFormId} not found or not owned by user ${userId} for email sending:`, orderFormError?.message);
-                    return res.status(404).json({ error: 'Order Form not found or not accessible by this user.' });
-                }
+        if (orderFormError || !orderForm) {
+          console.error(`Order Form ${orderFormId} not found or not owned by user ${userId} for email sending:`, orderFormError?.message);
+          return res.status(404).json({ error: 'Order Form not found or not accessible by this user.' });
+        }
 
-                // 3. Send the email using the imported service function
-                await sendOrderFormEmail({
-                    to,
-                    subject,
-                    htmlBody,
-                    pdfBufferBase64,
-                    orderFormNumber: orderForm.orderFormNumber, // Use the actual order form number from DB
-                    senderName: senderName || process.env.SENDER_NAME || 'InvoiceCraft'
-                });
+        // 3. Send the email using the imported service function
+        await sendOrderFormEmail({
+          to,
+          cc, // <--- अब यह यहाँ परिभाषित है
+          bcc, // <--- अब यह यहाँ परिभाषित है
+          subject,
+          htmlBody,
+          pdfBufferBase64,
+          orderFormNumber: orderForm.orderFormNumber, // Use the actual order form number from DB
+          senderName: senderName || process.env.SENDER_NAME || 'InvoiceCraft',
+          senderEmail
+        });
 
-                res.status(200).json({ success: true, message: 'Order Form email sent successfully!' });
+        res.status(200).json({ success: true, message: 'Order Form email sent successfully!' });
 
-            } catch (error) {
-                console.error('Error sending order form email:', error.message, error.stack);
-                // Check if the error is related to email credentials (e.g., from emailService.js verification)
-                if (error.message.includes('Authentication failed') || error.message.includes('Invalid login')) {
-                     return res.status(500).json({ success: false, message: 'Email service authentication failed. Please check server SMTP credentials.' });
-                }
-                return res.status(500).json({ success: false, message: 'Failed to send order form email.', details: error.message });
-            }
-        })
-    );
+      } catch (error) {
+        console.error('Error sending order form email:', error.message, error.stack);
+        if (error.message.includes('Authentication failed') || error.message.includes('Invalid login')) {
+          return res.status(500).json({ success: false, message: 'Email service authentication failed. Please check server SMTP credentials.' });
+        }
+        return res.status(500).json({ success: false, message: 'Failed to send order form email.', details: error.message });
+      }
+    })
+  );
 
   return router;
 };

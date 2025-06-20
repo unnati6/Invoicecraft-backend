@@ -77,11 +77,14 @@ export const sendPasswordResetEmail = async ({
 /**
  * @typedef {Object} OrderFormEmailOptions
  * @property {string} to
+ * @property {string} cc // Added CC
+ * @property {string} bcc // Added BCC
  * @property {string} subject
  * @property {string} htmlBody
  * @property {string} pdfBufferBase64
  * @property {string} orderFormNumber
  * @property {string} [senderName='InvoiceCraft'] - Optional sender display name
+ * @property {string} senderEmail // Added senderEmail
  */
 
 /**
@@ -91,15 +94,21 @@ export const sendPasswordResetEmail = async ({
  */
 export const sendOrderFormEmail = async ({
   to,
+  cc,
+  bcc,
   subject,
   htmlBody,
   pdfBufferBase64,
   orderFormNumber,
-  senderName = 'InvoiceCraft' // Default sender name
+  senderName = 'InvoiceCraft', // Default sender name
+  senderEmail
+
 }) => {
   await transporter.sendMail({
-    from: `"${senderName}" <${process.env.SMTP_USER}>`,
+    from: `"${senderName}" <${senderEmail}>`,
     to,
+    cc,
+    bcc,
     subject,
     html: htmlBody,
     attachments: [
@@ -116,15 +125,20 @@ export const sendOrderFormEmail = async ({
 
 export const sendInvoiceEmail = async ({
   to,
+   cc, // Destructure CC
+  bcc, // Destructure BCC
   subject,
   htmlBody,
   pdfBufferBase64,
   invoiceNumber, // Changed from orderFormNumber
-  senderName = 'InvoiceCraft' // Default sender name
+  senderName = 'InvoiceCraft', // Default sender name
+  senderEmail
 }) => {
   await transporter.sendMail({
-    from: `"${senderName}" <${process.env.SMTP_USER}>`,
+    from: `"${senderName}" <${senderEmail}>`,
     to,
+    cc, // CC फील्ड पास करें
+    bcc, // BCC फील्ड पास करें
     subject,
     html: htmlBody,
     attachments: [
